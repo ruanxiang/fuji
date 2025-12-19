@@ -23,7 +23,6 @@
 (require 'json)
 
 (defconst nexus-paper-graphlit-url "https://data-scus.graphlit.io/api/v1/graphql")
-(defconst nexus-paper-graphlit-token-url "https://portal.graphlit.dev/api/auth/token")
 
 (defgroup nexus-paper nil
   "Customization group for Nexus-Paper."
