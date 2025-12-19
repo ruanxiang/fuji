@@ -116,6 +116,34 @@ If nil, use the default model for the vision backend."
               ("no_proxy" . "^\\(localhost\\|127.0.0.1\\)")))
     (setq url-proxy-services nil))
   (message "Nexus-Paper: Proxy settings applied (%s)" (or nexus-paper-http-proxy "None")))
+(defvar nexus-paper--token nil "Cached Graphlit JWT token.")
+
+(defun nexus-paper--get-token (callback)
+  "Get Graphlit JWT token by generating it locally and call CALLBACK with it."
+  (if nexus-paper--token
+      (funcall callback nexus-paper--token)
+    (let* ((auth (nexus-paper--get-auth "graphlit"))
+           (env-id nexus-paper-graphlit-environment-id)
+           (org-id (plist-get auth :user))
+           (secret (plist-get auth :secret))
+           (script-path (expand-file-name "nexus-paper-gen-token.py" 
+                                        (file-name-directory "/home/ruan/Repositories/EmacsPaperreadingWorkflowAtGithub/nexus-paper.el")))
+           (python-exec (file-name-directory (expand-file-name nexus-paper-marker-executable)))
+           ;; Try to use the same venv as marker
+           (cmd (format "%s/python %s %s %s %s" 
+                        python-exec script-path org-id env-id secret)))
+      
+      (unless (and env-id (not (string-empty-p env-id)))
+        (error "Graphlit Environment ID is not set. Run M-x nexus-paper-configure"))
+      
+      (message "Nexus-Paper: Generating local JWT token...")
+      (let ((token (string-trim (shell-command-to-string cmd))))
+        (if (and token (not (string-prefix-p "Error" token)))
+            (progn
+              (setq nexus-paper--token token)
+              (funcall callback token))
+          (error "Nexus-Paper: Local token generation failed: %s" token))))))
+
 
 (defun nexus-paper-check-health ()
   "Check the health of the Nexus-Paper environment."
@@ -306,34 +334,6 @@ favoring bib-search integration if available."
    (t
     (let ((file (read-file-name "Select PDF: " (or nexus-paper-bib-path default-directory) nil t)))
       (expand-file-name (substitute-in-file-name (expand-file-name file)))))))
-
-(defvar nexus-paper--token nil "Cached Graphlit JWT token.")
-
-(defun nexus-paper--get-token (callback)
-  "Get Graphlit JWT token by generating it locally and call CALLBACK with it."
-  (if nexus-paper--token
-      (funcall callback nexus-paper--token)
-    (let* ((auth (nexus-paper--get-auth "graphlit"))
-           (env-id nexus-paper-graphlit-environment-id)
-           (org-id (plist-get auth :user))
-           (secret (plist-get auth :secret))
-           (script-path (expand-file-name "nexus-paper-gen-token.py" 
-                                        (file-name-directory "/home/ruan/Repositories/EmacsPaperreadingWorkflowAtGithub/nexus-paper.el")))
-           (python-exec (file-name-directory (expand-file-name nexus-paper-marker-executable)))
-           ;; Try to use the same venv as marker
-           (cmd (format "%s/python %s %s %s %s" 
-                        python-exec script-path org-id env-id secret)))
-      
-      (unless (and env-id (not (string-empty-p env-id)))
-        (error "Graphlit Environment ID is not set. Run M-x nexus-paper-configure"))
-      
-      (message "Nexus-Paper: Generating local JWT token...")
-      (let ((token (string-trim (shell-command-to-string cmd))))
-        (if (and token (not (string-prefix-p "Error" token)))
-            (progn
-              (setq nexus-paper--token token)
-              (funcall callback token))
-          (error "Nexus-Paper: Local token generation failed: %s" token))))))
 
 (defun nexus-paper--ingest-to-graphlit (text filename callback)
   "Ingest TEXT into Graphlit with FILENAME, then call CALLBACK with content ID."
