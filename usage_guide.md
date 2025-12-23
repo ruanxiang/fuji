@@ -17,10 +17,10 @@ Run the command:
 ## 4. Processing (First Time Only)
 - If this is the first time you've selected this PDF, Nexus-Paper will convert it using `marker`.
 - **Status**: You will see "Processing PDF with Marker...".
-- **Visual Feedback**: A buffer `*nexus-paper-marker*` will open showing the internal progress.
+- **Visual Feedback**: A buffer `*Nexus Marker Output*` will open showing the internal progress.
 - **First Run Warning**: The first time you run this, Marker will download large AI models (several GB). This can take **5-10 minutes**. Please be patient and watch the download progress in the opened buffer.
 - **Success**: You will see "Chat ready for [filename]" and a new buffer will open.
-- **Failure**: Check the `*nexus-paper-marker*` buffer for errors.
+- **Failure**: Check the `*Nexus Marker Output*` buffer for errors.
 
 ## 5. Chatting
 - A new buffer named `*Nexus-Ref-Chat: filename*` will open.

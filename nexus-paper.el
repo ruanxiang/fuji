@@ -229,7 +229,7 @@ If nil, use the default model for the vision backend."
       ;; 4. Advice
       (insert "\n" (make-string 30 ?-) "\n")
       (insert "Tip: Run M-x nexus-paper-configure to modify settings.\n")
-      (insert "Tip: Check *Nexus Marker Output* if parsing fails.\n"))
+      (insert "Tip: Marker progress is shown in *Nexus Marker Output* during processing.\n"))
     (display-buffer (current-buffer))))
 
 (defun nexus-paper--ensure-config ()
@@ -320,8 +320,17 @@ CALLBACK is called with the directory containing the results."
       (message "Nexus-Paper: Starting Marker (%s) for %s..." 
                (file-name-nondirectory (or marker-exe "marker"))
                (file-name-nondirectory pdf-file))
-      (let ((process (apply #'start-process "nexus-marker" "*Nexus Marker Output*"
+      (let* ((out-buf (get-buffer-create "*Nexus Marker Output*"))
+             (process (apply #'start-process "nexus-marker" out-buf
                             (or marker-exe "marker") marker-args)))
+        (with-current-buffer out-buf
+          (let ((inhibit-read-only t))
+            (erase-buffer)
+            (insert "Nexus-Paper: Processing PDF with Marker...\n")
+            (insert "Note: The FIRST run may take several minutes as it downloads AI models (~数GB).\n")
+            (insert "Command: " (or marker-exe "marker") " " (mapconcat #'identity marker-args " ") "\n")
+            (insert (make-string 40 ?-) "\n\n"))
+          (display-buffer (current-buffer)))
         (set-process-sentinel
          process
          (lambda (proc event)
