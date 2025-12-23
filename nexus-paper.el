@@ -74,6 +74,23 @@ If nil, use the default model for the vision backend."
                  string)
   :group 'nexus-paper)
 
+(defun nexus-paper--save-auth-entry (org-id secret)
+  "Save Graphlit ORG-ID and SECRET to `~/.authinfo`."
+  (let* ((auth-file (expand-file-name "~/.authinfo"))
+         (entry (format "machine graphlit login %s password %s\n" org-id secret)))
+    (with-temp-buffer
+      (when (file-exists-p auth-file)
+        (insert-file-contents auth-file))
+      (goto-char (point-min))
+      ;; Remove old entry if exists
+      (while (re-search-forward "^machine graphlit .*\n" nil t)
+        (replace-match ""))
+      (goto-char (point-max))
+      (insert entry)
+      (write-region (point-min) (point-max) auth-file nil 'silent))
+    (auth-source-forget-all-cached)
+    (message "Nexus-Paper: Credentials saved to ~/.authinfo and cache cleared.")))
+
 (defun nexus-paper-configure ()
   "Interactively configure or modify Nexus-Paper settings."
   (interactive)
@@ -86,6 +103,9 @@ If nil, use the default model for the vision backend."
                                        '("openai" "gemini" "anthropic" "ollama") 
                                        nil nil (symbol-name (or nexus-paper-gptel-vision-backend 'nil))))
          (vis-model (read-string "Vision Model: " (or nexus-paper-gptel-vision-model "")))
+         (org-id (read-string "Graphlit Organization ID: " 
+                             (or (plist-get (condition-case nil (nexus-paper--get-auth "graphlit") (error nil)) :user) "")))
+         (secret (read-passwd "Graphlit Secret Key: "))
          (env-id (read-string "Graphlit Environment ID: " (or nexus-paper-graphlit-environment-id "")))
          (proxy (read-string "HTTP Proxy (e.g. 127.0.0.1:7890, leave empty for none): " 
                             (or nexus-paper-http-proxy ""))))
@@ -98,6 +118,10 @@ If nil, use the default model for the vision backend."
     (unless (string-empty-p vis-model)
       (customize-save-variable 'nexus-paper-gptel-vision-model vis-model))
     
+    ;; Save credentials to ~/.authinfo
+    (when (and (not (string-empty-p org-id)) (not (string-empty-p secret)))
+      (nexus-paper--save-auth-entry org-id secret))
+
     (if (string-empty-p proxy)
         (customize-save-variable 'nexus-paper-http-proxy nil)
       (customize-save-variable 'nexus-paper-http-proxy proxy))
@@ -283,8 +307,8 @@ CALLBACK is called with the directory containing the results."
                          (if (and (file-exists-p single-exe) (file-executable-p single-exe))
                              single-exe
                            nexus-paper-marker-executable))))
-         ;; marker_single uses [FPATH] --output_dir [DIR]
-         (marker-args (list pdf-file "--output_dir" cache-dir)))
+         ;; marker_single uses [OPTIONS] FPATH
+         (marker-args (list "--output_dir" cache-dir pdf-file)))
     
     (if existing-md
         (progn
