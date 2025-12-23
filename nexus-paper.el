@@ -107,12 +107,14 @@ If nil, use the default model for the vision backend."
                              (or (plist-get (condition-case nil (nexus-paper--get-auth "graphlit") (error nil)) :user) "")))
          (secret (read-passwd "Graphlit Secret Key: "))
          (env-id (read-string "Graphlit Environment ID: " (or nexus-paper-graphlit-environment-id "")))
+         (cache-dir (read-directory-name "Cache Directory: " (or nexus-paper-cache-directory "")))
          (proxy (read-string "HTTP Proxy (e.g. 127.0.0.1:7890, leave empty for none): " 
                             (or nexus-paper-http-proxy ""))))
     
     (customize-save-variable 'nexus-paper-marker-executable (expand-file-name marker-path))
     (customize-save-variable 'nexus-paper-bib-path (expand-file-name bib-path))
     (customize-save-variable 'nexus-paper-graphlit-environment-id env-id)
+    (customize-save-variable 'nexus-paper-cache-directory (expand-file-name cache-dir))
     (unless (string= vis-backend "nil")
       (customize-save-variable 'nexus-paper-gptel-vision-backend (intern vis-backend)))
     (unless (string-empty-p vis-model)
