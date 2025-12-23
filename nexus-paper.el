@@ -18,9 +18,11 @@
 ;;; Code:
 
 (require 'cl-lib)
-(require 'auth-source)
-(require 'url)
 (require 'json)
+(require 'url)
+(require 'auth-source)
+(require 'subr-x)
+(require 'ansi-color)
 
 (defconst nexus-paper-graphlit-url "https://data-scus.graphlit.io/api/v1/graphql")
 
@@ -321,33 +323,45 @@ CALLBACK is called with the directory containing the results."
                (file-name-nondirectory (or marker-exe "marker"))
                (file-name-nondirectory pdf-file))
       (let* ((out-buf (get-buffer-create "*Nexus Marker Output*"))
-             (process (apply #'start-process "nexus-marker" out-buf
-                            (or marker-exe "marker") marker-args)))
+             (process-environment (cons "PYTHONUNBUFFERED=1" process-environment))
+             (process (make-process
+                       :name "nexus-marker"
+                       :buffer out-buf
+                       :command (cons (or marker-exe "marker") marker-args)
+                       :connection-type 'pty
+                       :filter (lambda (proc string)
+                                 (when (buffer-live-p (process-buffer proc))
+                                   (with-current-buffer (process-buffer proc)
+                                     (let ((moving (= (point) (process-mark proc)))
+                                           (inhibit-read-only t))
+                                       (save-excursion
+                                         (goto-char (process-mark proc))
+                                         (insert (ansi-color-apply string))
+                                         (set-marker (process-mark proc) (point)))
+                                       (if moving (goto-char (process-mark proc)))))))
+                       :sentinel (lambda (proc event)
+                                   (when (memq (process-status proc) '(exit signal))
+                                     (let ((exit-status (process-exit-status proc)))
+                                       (if (zerop exit-status)
+                                           (let ((final-md (nexus-paper--find-marker-output cache-dir)))
+                                             (if final-md
+                                                 (progn
+                                                   (message "Nexus-Paper: Marker finished successfully.")
+                                                   (funcall callback final-md))
+                                               (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
+                                                 (display-buffer (current-buffer))
+                                                 (error "Nexus-Paper: Marker finished but no .md file found in %s" cache-dir))))
+                                         (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
+                                           (display-buffer (current-buffer))
+                                           (error "Nexus-Paper: Marker failed (%d): %s. Check output for details." exit-status event)))))))))
         (with-current-buffer out-buf
           (let ((inhibit-read-only t))
             (erase-buffer)
-            (insert "Nexus-Paper: Processing PDF with Marker...\n")
+            (insert "Nexus-Paper: Processing PDF with Marker (PTY mode)...\n")
             (insert "Note: The FIRST run may take several minutes as it downloads AI models (~数GB).\n")
             (insert "Command: " (or marker-exe "marker") " " (mapconcat #'identity marker-args " ") "\n")
             (insert (make-string 40 ?-) "\n\n"))
-          (display-buffer (current-buffer)))
-        (set-process-sentinel
-         process
-         (lambda (proc event)
-           (when (memq (process-status proc) '(exit signal))
-             (let ((exit-status (process-exit-status proc)))
-               (if (zerop exit-status)
-                   (let ((final-md (nexus-paper--find-marker-output cache-dir)))
-                     (if final-md
-                         (progn
-                           (message "Nexus-Paper: Marker finished successfully.")
-                           (funcall callback final-md))
-                       (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
-                         (display-buffer (current-buffer))
-                         (error "Nexus-Paper: Marker finished but no .md file found in %s" cache-dir))))
-                 (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
-                   (display-buffer (current-buffer))
-                   (error "Nexus-Paper: Marker failed (%d): %s. Check output for details." exit-status event))))))))))
+          (display-buffer (current-buffer))))))
 
 (defun nexus-paper--select-pdf ()
   "Select a PDF file. 
