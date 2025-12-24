@@ -595,8 +595,12 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
     (error "Nexus-Paper: Environment not ready. Run M-x nexus-paper-configure"))
   
   (let* ((pdf-file (nexus-paper--select-pdf))
-         (modes '("Auto (Run Marker)" "Skip (Text Only)" "Load Local Result"))
-         (mode (completing-read "Marker Mode: " modes nil t))
+         ;; Define modes with descriptive labels for the user as requested
+         (mode-map '(("Auto (Run Marker) - High accuracy, supports figures" . auto)
+                     ("Skip (pdftotext) - Fast, text only, lower accuracy" . skip)
+                     ("Load Local Result - Use pre-existing Marker output" . local)))
+         (mode-label (completing-read "Marker Mode: " (mapcar #'car mode-map) nil t))
+         (mode (cdr (assoc mode-label mode-map)))
          (results-dir (nexus-paper--get-cache-path pdf-file))
          (marker-callback 
           (lambda (md-file)
@@ -628,29 +632,29 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                      
                      (display-buffer chat-buffer)
                      (goto-char (point-max))
-                     (message "Nexus-Paper: Chat ready for %s" filename))))))))))
+                     (message "Nexus-Paper: Chat ready for %s" filename))))))))
 
-    (cond
-     ((string-prefix-p "Auto" mode)
-      (nexus-paper--process-pdf-with-marker pdf-file marker-callback))
-     
-     ((string-prefix-p "Skip" mode)
-      (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
-        (unless (file-directory-p results-dir) (make-directory results-dir t))
-        (with-temp-file md-file
-          (insert "# " (file-name-nondirectory pdf-file) "\n\n")
-          (insert "> [!NOTE]\n")
-          (insert "> Marker processing skipped. This is a text-only ingestion.\n\n")
-          (insert (nexus-paper--get-pdf-text pdf-file)))
-        (funcall marker-callback md-file)))
-     
-     ((string-prefix-p "Load" mode)
-      (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
-        (nexus-paper--use-local-marker-result local-dir results-dir)
-        (let ((md-file (nexus-paper--find-marker-output results-dir)))
-          (if md-file
-              (funcall marker-callback md-file)
-            (error "Nexus-Paper: No .md file found in the selected directory!")))))))
+    (pcase mode
+      ('auto
+       (nexus-paper--process-pdf-with-marker pdf-file marker-callback))
+      
+      ('skip
+       (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
+         (unless (file-directory-p results-dir) (make-directory results-dir t))
+         (with-temp-file md-file
+           (insert "# " (file-name-nondirectory pdf-file) "\n\n")
+           (insert "> [!NOTE]\n")
+           (insert "> Marker processing skipped. This is a text-only ingestion using pdftotext (lower accuracy).\n\n")
+           (insert (nexus-paper--get-pdf-text pdf-file)))
+         (funcall marker-callback md-file)))
+      
+      ('local
+       (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
+         (nexus-paper--use-local-marker-result local-dir results-dir)
+         (let ((md-file (nexus-paper--find-marker-output results-dir)))
+           (if md-file
+               (funcall marker-callback md-file)
+             (error "Nexus-Paper: No .md file found in the selected directory!")))))))))
 
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here
