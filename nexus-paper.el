@@ -254,6 +254,24 @@ If nil, use the default model for the vision backend."
                 :secret (if (functionp secret) (funcall secret) secret)))
       (error "No credentials found for %s in auth-source" machine))))
 
+(defun nexus-paper--get-pdf-text (pdf-file)
+  "Extract text from PDF-FILE using `pdftotext` system utility."
+  (let ((pdf-file (expand-file-name pdf-file)))
+    (with-temp-buffer
+      (call-process "pdftotext" nil t nil pdf-file "-")
+      (buffer-string))))
+
+(defun nexus-paper--use-local-marker-result (local-dir cache-dir)
+  "Link files from LOCAL-DIR to CACHE-DIR."
+  (unless (file-directory-p cache-dir)
+    (make-directory cache-dir t))
+  (let ((files (directory-files local-dir t directory-files-no-dot-files-regexp)))
+    (dolist (file files)
+      (let ((dest (expand-file-name (file-name-nondirectory file) cache-dir)))
+        (if (fboundp 'make-symbolic-link)
+            (make-symbolic-link file dest t)
+          (copy-file file dest t))))))
+
 (defun nexus-paper-verify-environment ()
   "Verify that the environment is correctly set up for Nexus-Paper."
   (interactive)
@@ -576,40 +594,63 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
   (unless (nexus-paper-verify-environment)
     (error "Nexus-Paper: Environment not ready. Run M-x nexus-paper-configure"))
   
-  (let ((pdf-file (nexus-paper--select-pdf)))
-    (nexus-paper--process-pdf-with-marker
-     pdf-file
-     (lambda (md-file)
-       (let* ((results-dir (file-name-directory md-file))
-              (filename (file-name-nondirectory pdf-file))
-              (md-content (with-temp-buffer
-                            (insert-file-contents md-file)
-                            (buffer-string))))
-         (message "Nexus-Paper: Ingesting to Graphlit...")
-         (nexus-paper--ingest-to-graphlit
-          md-content filename
-          (lambda (content-id)
-            (message "Nexus-Paper: Ingested (ID: %s). Initializing chat..." content-id)
-            (let ((chat-buffer (get-buffer-create (format "*Nexus-Chat: %s*" filename))))
-              (with-current-buffer chat-buffer
-                (gptel-mode)
-                (setq-local nexus-paper--content-id content-id)
-                (setq-local nexus-paper--results-dir results-dir)
-                ;; Setup gptel locally for this buffer
-                (setq-local gptel-backend 
-                            (gptel-make-generic "Nexus-Graphlit"
-                              :request-func 'nexus-paper-gptel-request
-                              :stream nil))
-                (setq-local gptel-model "Graphlit-RAG")
-                
-                (nexus-paper--setup-buffer-header filename content-id)
-                
-                ;; Add cleanup hook
-                (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
-                
-                (display-buffer chat-buffer)
-                (goto-char (point-max))
-                (message "Nexus-Paper: Chat ready for %s" filename))))))))))
+  (let* ((pdf-file (nexus-paper--select-pdf))
+         (modes '("Auto (Run Marker)" "Skip (Text Only)" "Load Local Result"))
+         (mode (completing-read "Marker Mode: " modes nil t))
+         (results-dir (nexus-paper--get-cache-path pdf-file))
+         (marker-callback 
+          (lambda (md-file)
+            (let* ((filename (file-name-nondirectory pdf-file))
+                   (md-content (with-temp-buffer
+                                 (insert-file-contents md-file)
+                                 (buffer-string))))
+              (message "Nexus-Paper: Ingesting to Graphlit...")
+              (nexus-paper--ingest-to-graphlit
+               md-content filename
+               (lambda (content-id)
+                 (message "Nexus-Paper: Ingested (ID: %s). Initializing chat..." content-id)
+                 (let ((chat-buffer (get-buffer-create (format "*Nexus-Chat: %s*" filename))))
+                   (with-current-buffer chat-buffer
+                     (gptel-mode)
+                     (setq-local nexus-paper--content-id content-id)
+                     (setq-local nexus-paper--results-dir (file-name-directory md-file))
+                     ;; Setup gptel locally for this buffer
+                     (setq-local gptel-backend 
+                                 (gptel-make-generic "Nexus-Graphlit"
+                                   :request-func 'nexus-paper-gptel-request
+                                   :stream nil))
+                     (setq-local gptel-model "Graphlit-RAG")
+                     
+                     (nexus-paper--setup-buffer-header filename content-id)
+                     
+                     ;; Add cleanup hook
+                     (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
+                     
+                     (display-buffer chat-buffer)
+                     (goto-char (point-max))
+                     (message "Nexus-Paper: Chat ready for %s" filename))))))))))
+
+    (cond
+     ((string-prefix-p "Auto" mode)
+      (nexus-paper--process-pdf-with-marker pdf-file marker-callback))
+     
+     ((string-prefix-p "Skip" mode)
+      (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
+        (unless (file-directory-p results-dir) (make-directory results-dir t))
+        (with-temp-file md-file
+          (insert "# " (file-name-nondirectory pdf-file) "\n\n")
+          (insert "> [!NOTE]\n")
+          (insert "> Marker processing skipped. This is a text-only ingestion.\n\n")
+          (insert (nexus-paper--get-pdf-text pdf-file)))
+        (funcall marker-callback md-file)))
+     
+     ((string-prefix-p "Load" mode)
+      (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
+        (nexus-paper--use-local-marker-result local-dir results-dir)
+        (let ((md-file (nexus-paper--find-marker-output results-dir)))
+          (if md-file
+              (funcall marker-callback md-file)
+            (error "Nexus-Paper: No .md file found in the selected directory!")))))))
 
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here

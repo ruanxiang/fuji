@@ -22,6 +22,19 @@ Run the command:
 - **Success**: You will see "Chat ready for [filename]" and a new buffer will open.
 - **Failure**: Check the `*Nexus Marker Output*` buffer for errors.
 
+## Performance Tuning
+
+### Marker Processing
+Marker processing can be slow on machines without a GPU. Nexus-Paper provides three modes to handle this:
+1. **Auto (Run Marker)**: Full multimodal processing (extracts text, equations, and images). Recommended if you have a GPU or a powerful CPU.
+2. **Skip (Text Only)**: Bypasses Marker and uses `pdftotext` for fast ingestion to Graphlit. Ideal for quick reading where figure analysis isn't required.
+3. **Load Local Result**: Prompts you for a directory containing pre-generated Marker results.
+
+### Recommended Workflow for Low-end Hardware
+- **Pre-process in Bulk**: Run Marker on a machine with a GPU during idle time and save the results.
+- **Load Locally**: Use the "Load Local Result" option in `rx/gptel-ref-chat` to instanty load those results on your low-end device.
+- **Cache is King**: Nexus-Paper caches all Marker results. Once a paper is processed, switching between modes or restarting the session is near-instant.
+
 ## 5. Chatting
 - A new buffer named `*Nexus-Ref-Chat: filename*` will open.
 - This is a standard `gptel` buffer.
