@@ -632,7 +632,7 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                      
                      (display-buffer chat-buffer)
                      (goto-char (point-max))
-                     (message "Nexus-Paper: Chat ready for %s" filename))))))))
+                     (message "Nexus-Paper: Chat ready for %s" filename)))))))))
 
     (pcase mode
       ('auto
@@ -654,7 +654,7 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
          (let ((md-file (nexus-paper--find-marker-output results-dir)))
            (if md-file
                (funcall marker-callback md-file)
-             (error "Nexus-Paper: No .md file found in the selected directory!")))))))))
+             (error "Nexus-Paper: No .md file found in the selected directory!"))))))))
 
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here
