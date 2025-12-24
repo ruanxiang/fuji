@@ -361,7 +361,7 @@ CALLBACK is called with the directory containing the results."
             (insert "Note: The FIRST run may take several minutes as it downloads AI models (~数GB).\n")
             (insert "Command: " (or marker-exe "marker") " " (mapconcat #'identity marker-args " ") "\n")
             (insert (make-string 40 ?-) "\n\n"))
-          (display-buffer (current-buffer))))))
+          (display-buffer (current-buffer)))))))
 
 (defun nexus-paper--select-pdf ()
   "Select a PDF file. 
@@ -421,7 +421,7 @@ favoring bib-search integration if available."
                                      (if content-id
                                          (funcall callback content-id)
                                        (error "Nexus-Paper: Ingestion failed: %s" (if resp (json-encode resp) "Invalid JSON"))))
-                                 (error "Nexus-Paper: Ingestion failed (no body)"))))))))))
+                                 (error "Nexus-Paper: Ingestion failed (no body)"))))))))))))
 
 (defvar-local nexus-paper--content-id nil "Graphlit content ID for the current paper.")
 (defvar-local nexus-paper--results-dir nil "Directory containing Marker results.")
@@ -463,7 +463,7 @@ favoring bib-search integration if available."
                                      (if answer
                                          (funcall callback answer)
                                        (error "Nexus-Paper: Query failed: %s" (if resp (json-encode resp) "Invalid JSON"))))
-                                 (error "Nexus-Paper: Query failed (no body)"))))))))))
+                                 (error "Nexus-Paper: Query failed (no body)"))))))))))))
 
 ;;; gptel Integration
 
@@ -613,4 +613,3 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
 
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here
-)))))
