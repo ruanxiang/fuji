@@ -3,7 +3,7 @@
 ;; Copyright (C) 2025 ruanxiang
 ;; Author: ruanxiang
 ;; Version: 0.1
-;; Package-Requires: ((emacs "29.1") (gptel "0.1") (org-ref "3.0"))
+;; Package-Requires: ((emacs "29.1") (gptel "0.1") (org-ref "3.0") (mcp "0.1"))
 ;; Keywords: hypermedia, docs, multimedia
 ;; URL: https://github.com/ruanxiang/Nexus-Paper
 
@@ -20,11 +20,11 @@
 (require 'cl-lib)
 (require 'json)
 (require 'url)
+(require 'mcp)
+
 (require 'auth-source)
 (require 'subr-x)
 (require 'ansi-color)
-
-(defconst nexus-paper-graphlit-url "https://data-scus.graphlit.io/api/v1/graphql")
 
 (defgroup nexus-paper nil
   "Customization group for Nexus-Paper."
@@ -76,6 +76,43 @@ If nil, use the default model for the vision backend."
                  string)
   :group 'nexus-paper)
 
+(defcustom nexus-paper-mcp-server-name "graphlit"
+  "Name of the Graphlit MCP server registered in Emacs."
+  :type 'string
+  :group 'nexus-paper)
+
+(defconst nexus-paper-progress-buffer "*Nexus Progress*")
+
+(defun nexus-paper--log (format-string &rest args)
+  "Log a message to the Nexus Progress buffer."
+  (let ((msg (apply #'format format-string args))
+        (timestamp (format-time-string "[%H:%M:%S] ")))
+    (with-current-buffer (get-buffer-create nexus-paper-progress-buffer)
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (insert timestamp msg "\n")
+        (let ((win (get-buffer-window (current-buffer) t)))
+          (when win
+            (with-selected-window win
+              (goto-char (point-max))
+              (recenter -1)))))
+      (set-buffer-modified-p nil))
+    (message "Nexus-Paper: %s" msg)))
+
+(defun nexus-paper--setup-3-buffer-layout (pdf-buffer chat-buffer progress-buffer)
+  "Arrange windows in a 3-column layout: PDF | Chat | Progress."
+  (delete-other-windows)
+  (let* ((width (window-total-width))
+         (col-width (/ width 3)))
+    ;; Middle column (Chat)
+    (let ((chat-win (split-window-horizontally col-width)))
+      (set-window-buffer nil pdf-buffer)
+      (with-selected-window chat-win
+        ;; Right column (Progress)
+        (let ((prog-win (split-window-horizontally col-width)))
+          (set-window-buffer nil chat-buffer)
+          (set-window-buffer prog-win progress-buffer))))))
+
 (defun nexus-paper--save-auth-entry (org-id secret)
   "Save Graphlit ORG-ID and SECRET to `~/.authinfo`."
   (let* ((auth-file (expand-file-name "~/.authinfo"))
@@ -107,7 +144,7 @@ If nil, use the default model for the vision backend."
          (vis-model (read-string "Vision Model: " (or nexus-paper-gptel-vision-model "")))
          (org-id (read-string "Graphlit Organization ID: " 
                              (or (plist-get (condition-case nil (nexus-paper--get-auth "graphlit") (error nil)) :user) "")))
-         (secret (read-passwd "Graphlit Secret Key: "))
+         (secret (read-passwd "Graphlit JWT Secret: "))
          (env-id (read-string "Graphlit Environment ID: " (or nexus-paper-graphlit-environment-id "")))
          (cache-dir (read-directory-name "Cache Directory: " (or nexus-paper-cache-directory "")))
          (proxy (read-string "HTTP Proxy (e.g. 127.0.0.1:7890, leave empty for none): " 
@@ -130,9 +167,42 @@ If nil, use the default model for the vision backend."
         (customize-save-variable 'nexus-paper-http-proxy nil)
       (customize-save-variable 'nexus-paper-http-proxy proxy))
     
-    (setq nexus-paper--token nil)
     (nexus-paper-apply-proxy)
-    (message "Nexus-Paper: Configuration updated and saved.")))
+    (nexus-paper--register-mcp-server)
+    (message "Nexus-Paper: Configuration updated and MCP server registered.")))
+
+(defun nexus-paper--get-mcp-connection ()
+  "Get the current Graphlit MCP connection object."
+  (gethash nexus-paper-mcp-server-name mcp-server-connections))
+
+(defcustom nexus-paper-mcp-server-path
+  (expand-file-name "node_modules/graphlit-mcp-server/dist/index.js"
+                    (file-name-directory (or load-file-name buffer-file-name (locate-library "nexus-paper"))))
+  "Path to the Graphlit MCP server executable."
+  :type 'file
+  :group 'nexus-paper)
+
+(defun nexus-paper--register-mcp-server ()
+  "Register the Graphlit MCP server using current credentials."
+  (interactive)
+  (let* ((auth (nexus-paper--get-auth "graphlit"))
+         (org-id (plist-get auth :user))
+         (secret (plist-get auth :secret))
+         (env-id nexus-paper-graphlit-environment-id))
+    (if (and org-id secret env-id)
+        (progn
+          (nexus-paper--log "Registering/Restarting MCP server: %s" nexus-paper-mcp-server-name)
+          ;; Always stop first to ensure new credentials/env are applied
+          (when (gethash nexus-paper-mcp-server-name mcp-server-connections)
+            (mcp-stop-server nexus-paper-mcp-server-name))
+          (mcp-connect-server nexus-paper-mcp-server-name
+            :command "node"
+            :args (list nexus-paper-mcp-server-path)
+            :env `(:GRAPHLIT_ORGANIZATION_ID ,org-id
+                   :GRAPHLIT_JWT_SECRET ,secret
+                   :GRAPHLIT_ENVIRONMENT_ID ,env-id)
+            :syncp t))
+      (nexus-paper--log "[WARNING] Missing credentials for MCP registration."))))
 
 (defun nexus-paper-apply-proxy ()
   "Apply the configured proxy to Emacs `url-proxy-services`."
@@ -144,42 +214,13 @@ If nil, use the default model for the vision backend."
               ("no_proxy" . "^\\(localhost\\|127.0.0.1\\)")))
     (setq url-proxy-services nil))
   (message "Nexus-Paper: Proxy settings applied (%s)" (or nexus-paper-http-proxy "None")))
-(defvar nexus-paper--token nil "Cached Graphlit JWT token.")
-
-(defun nexus-paper--get-token (callback)
-  "Get Graphlit JWT token by generating it locally and call CALLBACK with it."
-  (if nexus-paper--token
-      (funcall callback nexus-paper--token)
-    (let* ((auth (nexus-paper--get-auth "graphlit"))
-           (env-id nexus-paper-graphlit-environment-id)
-           (org-id (plist-get auth :user))
-           (secret (plist-get auth :secret))
-           (script-path (expand-file-name "nexus-paper-gen-token.py" 
-                                        (file-name-directory "/home/ruan/Repositories/EmacsPaperreadingWorkflowAtGithub/nexus-paper.el")))
-           (python-exec (file-name-directory (expand-file-name nexus-paper-marker-executable)))
-           ;; Try to use the same venv as marker
-           (cmd (format "%s/python %s %s %s %s" 
-                        python-exec script-path org-id env-id secret)))
-      
-      (unless (and env-id (not (string-empty-p env-id)))
-        (error "Graphlit Environment ID is not set. Run M-x nexus-paper-configure"))
-      
-      (message "Nexus-Paper: Generating local JWT token...")
-      (let ((token (string-trim (shell-command-to-string cmd))))
-        (if (and token (not (string-prefix-p "Error" token)))
-            (progn
-              (setq nexus-paper--token token)
-              (funcall callback token))
-          (error "Nexus-Paper: Local token generation failed: %s" token))))))
-
-
 (defun nexus-paper-check-health ()
   "Check the health of the Nexus-Paper environment."
   (interactive)
   (with-current-buffer (get-buffer-create "*Nexus Health Check*")
     (let ((inhibit-read-only t))
       (erase-buffer)
-      (insert "Nexus-Paper Health Check\n" (make-string 30 ?=) "\n\n")
+      (insert "Nexus-Paper Health Check (MCP Mode)\n" (make-string 30 ?=) "\n\n")
       
       ;; 1. Marker
       (insert "[Marker]\n")
@@ -187,36 +228,20 @@ If nil, use the default model for the vision backend."
           (insert "  - Executable: OK (" nexus-paper-marker-executable ")\n")
         (insert "  - Executable: FAILED (Check nexus-paper-marker-executable)\n"))
       
-      ;; 2. Bib Path
+      ;; 2. Files
       (insert "\n[Files]\n")
       (if (and nexus-paper-bib-path (file-directory-p nexus-paper-bib-path))
           (insert "  - Bib Directory: OK (" nexus-paper-bib-path ")\n")
         (insert "  - Bib Directory: FAILED (Check nexus-paper-bib-path)\n"))
       
-      ;; 3. Proxy
-      (insert "\n[Network]\n")
-      (if nexus-paper-http-proxy
-          (insert "  - Proxy Setting: OK (" nexus-paper-http-proxy ")\n")
-        (insert "  - Proxy Setting: NOT SET (Direct connection)\n"))
-      (insert "  - url-proxy-services: " (prin1-to-string url-proxy-services) "\n")
+      ;; 3. MCP Server
+      (insert "\n[MCP Status]\n")
+      (insert "  - Server Name: " nexus-paper-mcp-server-name "\n")
+      (if (gethash nexus-paper-mcp-server-name mcp-server-connections)
+          (insert "  - Connected: SUCCESS\n")
+        (insert "  - Connected: FAILED (Run M-x nexus-paper-configure)\n"))
       
-      ;; 4. Real-time Connectivity Test
-      (insert "  - Connectivity Test: Testing...")
-      (condition-case err
-          (nexus-paper--get-token
-           (lambda (token)
-             (save-excursion
-               (with-current-buffer (get-buffer "*Nexus Health Check*")
-                 (let ((inhibit-read-only t))
-                   (goto-char (point-min))
-                   (when (re-search-forward "Connectivity Test: Testing..." nil t)
-                     (replace-match "Connectivity Test: SUCCESS (Local JWT Generation)")))))))
-        (error
-         (insert (format "FAILED (%s)\n    [!] Tip: Ensure 'pyjwt' is installed in your marker venv." 
-                         (error-message-string err)))))
-      (insert "\n")
-      
-      ;; 5. Graphlit Credentials
+      ;; 4. Graphlit Cloud
       (insert "\n[Graphlit Cloud]\n")
       (if (and nexus-paper-graphlit-environment-id (not (string-empty-p nexus-paper-graphlit-environment-id)))
           (insert "  - Environment ID: OK (" nexus-paper-graphlit-environment-id ")\n")
@@ -336,10 +361,9 @@ CALLBACK is called with the directory containing the results."
         (progn
           (message "Nexus-Paper: Using cached Marker results for %s" (file-name-nondirectory pdf-file))
           (funcall callback existing-md))
-      
-      (message "Nexus-Paper: Starting Marker (%s) for %s..." 
-               (file-name-nondirectory (or marker-exe "marker"))
-               (file-name-nondirectory pdf-file))
+      (nexus-paper--log "Starting Marker (%s) for %s..." 
+                       (file-name-nondirectory (or marker-exe "marker"))
+                       (file-name-nondirectory pdf-file))
       (let* ((out-buf (get-buffer-create "*Nexus Marker Output*"))
              (process-environment (cons "PYTHONUNBUFFERED=1" process-environment))
              (process (make-process
@@ -356,7 +380,10 @@ CALLBACK is called with the directory containing the results."
                                          (goto-char (process-mark proc))
                                          (insert (ansi-color-apply string))
                                          (set-marker (process-mark proc) (point)))
-                                       (if moving (goto-char (process-mark proc)))))))
+                                       (if moving (goto-char (process-mark proc)))))
+                                   ;; Also log to progress if it looks like a stage change
+                                   (when (string-match "Processing\\|Converting\\|Saving" string)
+                                     (nexus-paper--log "Marker: %s" (string-trim (ansi-color-filter string))))))
                        :sentinel (lambda (proc event)
                                    (when (memq (process-status proc) '(exit signal))
                                      (let ((exit-status (process-exit-status proc)))
@@ -364,13 +391,15 @@ CALLBACK is called with the directory containing the results."
                                            (let ((final-md (nexus-paper--find-marker-output cache-dir)))
                                              (if final-md
                                                  (progn
-                                                   (message "Nexus-Paper: Marker finished successfully.")
+                                                   (nexus-paper--log "Marker finished successfully.")
                                                    (funcall callback final-md))
                                                (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
                                                  (display-buffer (current-buffer))
-                                                 (error "Nexus-Paper: Marker finished but no .md file found in %s" cache-dir))))
+                                                  (nexus-paper--log "Marker failed: No .md file found in %s" cache-dir)
+                                                  (error "Nexus-Paper: Marker finished but no .md file found in %s" cache-dir))))
                                          (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
                                            (display-buffer (current-buffer))
+                                           (nexus-paper--log "Marker failed (%d): %s" exit-status event)
                                            (error "Nexus-Paper: Marker failed (%d): %s. Check output for details." exit-status event)))))))))
         (with-current-buffer out-buf
           (let ((inhibit-read-only t))
@@ -402,86 +431,91 @@ favoring bib-search integration if available."
     (let ((file (read-file-name "Select PDF: " (or nexus-paper-bib-path default-directory) nil t)))
       (expand-file-name (substitute-in-file-name (expand-file-name file)))))))
 
+(defun nexus-paper--mcp-parse-result (result)
+  "Parse the JSON result string from an MCP tool RESULT.
+RESULT is expected to be a plist like (:content [(:type \"text\" :text \"...\")])."
+  (let* ((content-vecc (plist-get result :content))
+         (first-item (and (> (length content-vecc) 0) (aref content-vecc 0)))
+         (text-val (and first-item (plist-get first-item :text))))
+    (if text-val
+        (condition-case nil
+            (json-read-from-string text-val)
+          (error nil))
+      nil)))
+
 (defun nexus-paper--ingest-to-graphlit (text filename callback)
-  "Ingest TEXT into Graphlit with FILENAME, then call CALLBACK with content ID."
-  (nexus-paper--get-token
-   (lambda (token)
-     (let* ((mutation "mutation IngestText($text: String!, $name: String!) {
-  ingestText(text: $text, name: $name, isMarkdown: true) {
-    id
-  }
-}")
-            (variables (list :text text :name filename))
-            (url-request-method "POST")
-            (url-request-extra-headers `(("Content-Type" . "application/json")
-                                         ("Authorization" . ,(concat "Bearer " token))))
-            (url-request-data (json-encode (list :query mutation :variables variables))))
-       (message "Nexus-Paper: Ingesting content to Graphlit...")
-       (let ((url-retrieve-timeout 30)) ; 30 seconds for ingestion
-         (url-retrieve nexus-paper-graphlit-url
-                       (lambda (status)
-                         (let ((err (plist-get status :error)))
-                           (if err
-                               (error "Nexus-Paper: Ingestion failed (network): %s" (cdr err))
-                             (goto-char (point-min))
-                             (if (not (re-search-forward "HTTP/.* 200" nil t))
-                                 (error "Nexus-Paper: Ingestion failed (HTTP error). Check *Messages* for raw response.")
-                               (goto-char (point-min))
-                               (if (re-search-forward "^$" nil t)
-                                   (let* ((json-object-type 'plist)
-                                          (resp (condition-case err-json
-                                                    (json-read)
-                                                  (error 
-                                                   (message "Nexus-Paper: JSON Parse Error: %s" (error-message-string err-json))
-                                                   (message "Nexus-Paper: Raw Response: %s" (buffer-string))
-                                                   nil)))
-                                          (content-id (when resp (plist-get (plist-get (plist-get resp :data) :ingestText) :id))))
-                                     (if content-id
-                                         (funcall callback content-id)
-                                       (error "Nexus-Paper: Ingestion failed: %s" (if resp (json-encode resp) "Invalid JSON"))))
-                                 (error "Nexus-Paper: Ingestion failed (no body)"))))))))))))
+  "Ingest TEXT into Graphlit with FILENAME via MCP, then call CALLBACK with content ID."
+  (nexus-paper--ensure-config)
+  (nexus-paper--log "[STEP 2/3] Ingesting content via MCP tool 'ingestText'...")
+  (let ((conn (nexus-paper--get-mcp-connection)))
+    (if (not conn)
+        (error "Nexus-Paper: MCP server not connected. Run M-x nexus-paper-configure")
+      (condition-case err
+          (mcp-async-call-tool conn "ingestText"
+                               `((text . ,text)
+                                 (name . ,filename)
+                                 (type . "Markdown"))
+                               (lambda (result)
+                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
+                                        (content-id (and parsed (cdr (assoc 'id parsed)))))
+                                   (if content-id
+                                       (progn
+                                         (nexus-paper--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
+                                         (funcall callback content-id))
+                                     (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
+                                       (nexus-paper--log "[FAILURE] %s" err-msg)
+                                       (error "Nexus-Paper: %s" err-msg)))))
+                               (lambda (err)
+                                 (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
+                                   (nexus-paper--log "[FAILURE] %s" err-msg)
+                                   (error "Nexus-Paper: %s" err-msg))))
+        (error
+         (let ((err-msg (format "MCP tool session error: %s" (error-message-string err))))
+           (nexus-paper--log "[FAILURE] %s" err-msg)
+           (error "Nexus-Paper: %s" err-msg)))))))
 
 (defvar-local nexus-paper--content-id nil "Graphlit content ID for the current paper.")
+(defvar-local nexus-paper--filename nil "Filename of the current paper.")
+(defvar-local nexus-paper--conversation-id nil "Graphlit conversation ID for the current session.")
 (defvar-local nexus-paper--results-dir nil "Directory containing Marker results.")
 
 (defun nexus-paper--query-graphlit (prompt callback)
-  "Send PROMPT to Graphlit for RAG and call CALLBACK with the answer."
-  (nexus-paper--get-token
-   (lambda (token)
-     (let* ((query "query Prompt($prompt: String!, $contentIds: [ID!]) {
-  prompt(prompt: $prompt, contentIds: $contentIds) {
-    answer
-  }
-}")
-            (variables (list :prompt prompt :contentIds (list nexus-paper--content-id)))
-            (url-request-method "POST")
-            (url-request-extra-headers `(("Content-Type" . "application/json")
-                                         ("Authorization" . ,(concat "Bearer " token))))
-            (url-request-data (json-encode (list :query query :variables variables))))
-       (message "Nexus-Paper: Querying Graphlit RAG...")
-       (let ((url-retrieve-timeout 20)) ; 20 seconds for query
-         (url-retrieve nexus-paper-graphlit-url
-                       (lambda (status)
-                         (let ((err (plist-get status :error)))
-                           (if err
-                               (error "Nexus-Paper: Query failed (network): %s" (cdr err))
-                             (goto-char (point-min))
-                             (if (not (re-search-forward "HTTP/.* 200" nil t))
-                                 (error "Nexus-Paper: Query failed (HTTP error). Check *Messages* for raw response.")
-                               (goto-char (point-min))
-                               (if (re-search-forward "^$" nil t)
-                                   (let* ((json-object-type 'plist)
-                                          (resp (condition-case err-json
-                                                    (json-read)
-                                                  (error 
-                                                   (message "Nexus-Paper: JSON Parse Error: %s" (error-message-string err-json))
-                                                   (message "Nexus-Paper: Raw Response: %s" (buffer-string))
-                                                   nil)))
-                                          (answer (when resp (plist-get (plist-get (plist-get resp :data) :prompt) :answer))))
-                                     (if answer
-                                         (funcall callback answer)
-                                       (error "Nexus-Paper: Query failed: %s" (if resp (json-encode resp) "Invalid JSON"))))
-                                 (error "Nexus-Paper: Query failed (no body)"))))))))))))
+  "Send PROMPT to Graphlit for RAG via MCP and call CALLBACK with the answer."
+  (let* ((conn (nexus-paper--get-mcp-connection))
+         ;; Add paper name context to help RAG since contentIds might be ignored by MCP tool
+         (paper-name (or (bound-and-true-p nexus-paper--filename) "this paper"))
+         (paper-context (format "[Context: Discussion about \"%s\"] " paper-name))
+         (full-prompt (concat paper-context prompt)))
+    (if (not conn)
+        (error "Nexus-Paper: MCP server not connected")
+      (nexus-paper--log "Querying Graphlit RAG (Conversation: %s)..." 
+                        (or nexus-paper--conversation-id "New"))
+      (condition-case err
+          (mcp-async-call-tool conn "promptConversation"
+                               `((prompt . ,full-prompt)
+                                 ,@(when nexus-paper--conversation-id
+                                     `((conversationId . ,nexus-paper--conversation-id))))
+                               (lambda (result)
+                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
+                                        (answer (and parsed (cdr (assoc 'answer parsed))))
+                                        (conv-id (and parsed (cdr (assoc 'id parsed)))))
+                                   (if answer
+                                       (progn
+                                         ;; Save conversation ID for continuity
+                                         (when conv-id
+                                           (setq nexus-paper--conversation-id conv-id))
+                                         (funcall callback answer))
+                                     (let ((err-msg (format "MCP Query failed to return answer: %s" result)))
+                                       (nexus-paper--log "[FAILURE] %s" err-msg)
+                                       (error "Nexus-Paper: %s" err-msg)))))
+                               (lambda (err)
+                                 (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
+                                   (nexus-paper--log "[FAILURE] %s" err-msg)
+                                   (error "Nexus-Paper: %s" err-msg))))
+        (error
+         (let ((err-msg (format "MCP tool session error: %s" (error-message-string err))))
+           (nexus-paper--log "[FAILURE] %s" err-msg)
+           (error "Nexus-Paper: %s" err-msg)))))))
 
 ;;; gptel Integration
 
@@ -548,34 +582,22 @@ Please explain the figure based on the image and the provided context."
     (nexus-paper--delete-from-graphlit nexus-paper--content-id)))
 
 (defun nexus-paper--delete-from-graphlit (content-id)
-  "Delete CONTENT-ID from Graphlit."
-  (nexus-paper--get-token
-   (lambda (token)
-     (let* ((mutation "mutation DeleteContent($id: ID!) {
-  deleteContent(id: $id) {
-    id
-  }
-}")
-            (variables (list :id content-id))
-            (url-request-method "POST")
-            (url-request-extra-headers `(("Content-Type" . "application/json")
-                                         ("Authorization" . ,(concat "Bearer " token))))
-            (url-request-data (json-encode (list :query mutation :variables variables))))
-       (url-retrieve nexus-paper-graphlit-url
-                     (lambda (status)
-                       (let ((err (plist-get status :error)))
-                         (if err
-                             (message "Nexus-Paper: Delete failed (network): %s" (cdr err))
-                           (goto-char (point-min))
-                           (if (re-search-forward "^$" nil t)
-                               (let* ((json-object-type 'plist)
-                                      (resp (condition-case nil
-                                                (json-read)
-                                              (error nil))))
-                                 (if (plist-get (plist-get resp :data) :deleteContent)
-                                     (message "Nexus-Paper: Content deleted from Graphlit.")
-                                   (message "Nexus-Paper: Delete failed: %s" (json-encode resp))))
-                             (message "Nexus-Paper: Delete failed (no body)"))))))))))
+  "Delete CONTENT-ID from Graphlit via MCP."
+  (nexus-paper--log "Deleting content %s via MCP tool 'deleteContent'..." content-id)
+  (let ((conn (nexus-paper--get-mcp-connection)))
+    (when conn
+      (condition-case err
+          (mcp-async-call-tool conn "deleteContent"
+                               `((id . ,content-id))
+                               (lambda (result)
+                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
+                                        (id (and parsed (cdr (assoc 'id parsed)))))
+                                   (nexus-paper--log "[SUCCESS] Content deleted: %s" id)))
+                               (lambda (err)
+                                 (nexus-paper--log "[FAILURE] Delete failed: %s" (error-message-string err))))
+        (error
+         (nexus-paper--log "[FAILURE] Delete session error: %s" (error-message-string err)))))))
+
 
 (defun nexus-paper--setup-buffer-header (filename content-id)
   "Set up a header for the chat buffer for FILENAME."
@@ -595,66 +617,90 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
     (error "Nexus-Paper: Environment not ready. Run M-x nexus-paper-configure"))
   
   (let* ((pdf-file (nexus-paper--select-pdf))
-         ;; Define modes with descriptive labels for the user as requested
          (mode-map '(("Auto (Run Marker) - High accuracy, supports figures" . auto)
                      ("Skip (pdftotext) - Fast, text only, lower accuracy" . skip)
                      ("Load Local Result - Use pre-existing Marker output" . local)))
          (mode-label (completing-read "Marker Mode: " (mapcar #'car mode-map) nil t))
          (mode (cdr (assoc mode-label mode-map)))
+         (filename (file-name-nondirectory pdf-file))
          (results-dir (nexus-paper--get-cache-path pdf-file))
-         (marker-callback 
-          (lambda (md-file)
-            (let* ((filename (file-name-nondirectory pdf-file))
-                   (md-content (with-temp-buffer
-                                 (insert-file-contents md-file)
-                                 (buffer-string))))
-              (message "Nexus-Paper: Ingesting to Graphlit...")
-              (nexus-paper--ingest-to-graphlit
-               md-content filename
-               (lambda (content-id)
-                 (message "Nexus-Paper: Ingested (ID: %s). Initializing chat..." content-id)
-                 (let ((chat-buffer (get-buffer-create (format "*Nexus-Chat: %s*" filename))))
-                   (with-current-buffer chat-buffer
-                     (gptel-mode)
-                     (setq-local nexus-paper--content-id content-id)
-                     (setq-local nexus-paper--results-dir (file-name-directory md-file))
-                     ;; Setup gptel locally for this buffer
-                     (setq-local gptel-backend 
-                                 (gptel-make-generic "Nexus-Graphlit"
-                                   :request-func 'nexus-paper-gptel-request
-                                   :stream nil))
-                     (setq-local gptel-model "Graphlit-RAG")
-                     
-                     (nexus-paper--setup-buffer-header filename content-id)
-                     
-                     ;; Add cleanup hook
-                     (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
-                     
-                     (display-buffer chat-buffer)
-                     (goto-char (point-max))
-                     (message "Nexus-Paper: Chat ready for %s" filename)))))))))
+         (pdf-buffer (find-file-noselect pdf-file))
+         (chat-buffer (get-buffer-create (format "*Nexus-Chat: %s*" filename)))
+         (prog-buffer (get-buffer-create nexus-paper-progress-buffer)))
 
-    (pcase mode
-      ('auto
-       (nexus-paper--process-pdf-with-marker pdf-file marker-callback))
-      
-      ('skip
-       (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
-         (unless (file-directory-p results-dir) (make-directory results-dir t))
-         (with-temp-file md-file
-           (insert "# " (file-name-nondirectory pdf-file) "\n\n")
-           (insert "> [!NOTE]\n")
-           (insert "> Marker processing skipped. This is a text-only ingestion using pdftotext (lower accuracy).\n\n")
-           (insert (nexus-paper--get-pdf-text pdf-file)))
-         (funcall marker-callback md-file)))
-      
-      ('local
-       (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
-         (nexus-paper--use-local-marker-result local-dir results-dir)
-         (let ((md-file (nexus-paper--find-marker-output results-dir)))
-           (if md-file
-               (funcall marker-callback md-file)
-             (error "Nexus-Paper: No .md file found in the selected directory!"))))))))
+    ;; Initial UI Setup
+    (with-current-buffer prog-buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "Nexus-Paper Progress: " filename "\n" (make-string 40 ?-) "\n\n")
+        (setq-local cursor-type nil)
+        (view-mode 1)))
+    
+    (with-current-buffer chat-buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "# Waiting for document ingestion...\n\n")
+        (insert "Progress is being tracked in the right buffer.")))
+
+    (nexus-paper--setup-3-buffer-layout pdf-buffer chat-buffer prog-buffer)
+    (nexus-paper--log "Workflow started in mode: %s" mode)
+
+    (let ((marker-callback 
+           (lambda (md-file)
+             (let* ((md-content (with-temp-buffer
+                                  (insert-file-contents md-file)
+                                  (buffer-string))))
+               (nexus-paper--ingest-to-graphlit
+                md-content filename
+                (lambda (content-id)
+                  (nexus-paper--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
+                  (with-current-buffer chat-buffer
+                    (let ((inhibit-read-only t)) (erase-buffer))
+                    (org-mode)
+                    (gptel-mode)
+                    (setq-local nexus-paper--content-id content-id)
+                    (setq-local nexus-paper--filename filename)
+                    (setq-local nexus-paper--results-dir results-dir)
+                    (setq-local gptel-backend 
+                                (gptel-make-generic "Nexus-Graphlit"
+                                  :request-func 'nexus-paper-gptel-request
+                                  :stream nil))
+                    (setq-local gptel-model "Graphlit-RAG")
+                    (nexus-paper--setup-buffer-header filename content-id)
+                    (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
+                    (nexus-paper--log "[SUCCESS] Chat initialization complete. Ready!")
+                    (goto-char (point-max)))))))))
+
+      (pcase mode
+        ('auto
+         (nexus-paper--log "[STEP 1/3] Starting Marker processing...")
+         (nexus-paper--process-pdf-with-marker pdf-file 
+           (lambda (md) 
+             (nexus-paper--log "[STEP 2/3] Marker finished. Ingesting content...")
+             (funcall marker-callback md))))
+        
+        ('skip
+         (nexus-paper--log "[STEP 1/3] Skipping Marker, extracting text directly...")
+         (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
+           (unless (file-directory-p results-dir) (make-directory results-dir t))
+           (with-temp-file md-file
+             (insert "# " filename "\n\n")
+             (insert "> [!NOTE]\n")
+             (insert "> Marker processing skipped. This is a text-only ingestion using pdftotext.\n\n")
+             (insert (nexus-paper--get-pdf-text pdf-file)))
+           (nexus-paper--log "[STEP 2/3] Text extracted. Ingesting content...")
+           (funcall marker-callback md-file)))
+        
+        ('local
+         (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
+           (nexus-paper--log "[STEP 1/3] Loading local Marker results from: %s" local-dir)
+           (nexus-paper--use-local-marker-result local-dir results-dir)
+           (let ((md-file (nexus-paper--find-marker-output results-dir)))
+             (if md-file
+                 (progn
+                   (nexus-paper--log "[STEP 2/3] Marker results loaded. Ingesting content...")
+                   (funcall marker-callback md-file))
+               (error "Nexus-Paper: No .md file found in the selected directory!")))))))))
 
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here
