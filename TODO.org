@@ -41,3 +41,9 @@ Essential for users on the free plan to manage quota.
 *** Vision & Configuration
 - Vision: Allow right-click on image links (from Marker) to "Ask Vision Model".
 - Config: Add  and other direct config wrappers to bypass UI menus.
+
+** TODO Grand Vision: "Emacs Antigravity"
+Transform Nexus from a passive "Reader" to an active "Maker".
+- **Agentic Coding**: The system should be able to write code, refactor files, and manage projects based on natural language instructions.
+- **Autonomous Execution**: Similar to Google Antigravity, but native to the Emacs environment.
+- Note: This is the long-term North Star for the project.
