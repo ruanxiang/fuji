@@ -22,3 +22,22 @@ Essential for users on the free plan to manage quota.
 1. valid implementation: Add  command.
 2. Display a tabulated list of papers (Title, ID, Ingestion Date).
 3. Allow marking items for deletion (bulk delete action via MCP ).
+
+** TODO Universal Reading Workflow Expansion
+*** Universal File Support
+- Support non-PDF inputs: .txt, .org, .docx (via pandoc), and URL (via eww/url-retrieve).
+- Abstract the "Extractor" layer: Input File -> [Extractor] -> Markdown Text.
+*** Hybrid Storage & Ingestion Strategy
+- Default: Upload only extracted text to Graphlit (saves storage quota).
+- Option: "Upload Original" for rich PDF/DOCX processing if quota permits.
+- Integration: Inject extracted text start-chunk into gptel context for immediate awareness.
+*** Personal Knowledge Base (Library & Memo)
+- Implement : A tabulated view of all read articles.
+- Local Persistence: Auto-create  to store:
+  - Metadata (Title, Author, Year)
+  - User Memos/Notes
+  - Chat Summary & Key Q&A
+- "Resume Reading": Opening a paper from Library restores its  and opens its Note buffer.
+*** Vision & Configuration
+- Vision: Allow right-click on image links (from Marker) to "Ask Vision Model".
+- Config: Add  and other direct config wrappers to bypass UI menus.
