@@ -1,5 +1,6 @@
 * Future Tasks
-** TODO Adjust progress buffer position
+** DONE Adjust progress buffer position
+Closed on 2025-12-26.
 Optimize the window layout (UI/UX) so the progress buffer is less intrusive or more logically placed.
 
 ** TODO Test "Load Local Result" Mode
