@@ -1019,6 +1019,7 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                       
                       (insert "\n* ") ;; Initial user prompt
                       (gptel-mode)
+                      (nexus-paper-mode 1)
                       (nexus-paper--setup-buffer-header filename content-id)
                       (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
                       (nexus-paper--log "[SUCCESS] Chat initialization complete. Ready!")
@@ -1057,6 +1058,52 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                    (nexus-paper--log "[STEP 2/3] Marker results loaded. Ingesting content...")
                    (funcall marker-callback md-file))
                (error "Nexus-Paper: No .md file found in the selected directory!")))))))))
+
+;;; Interactive Configuration Interfaces
+
+(defvar nexus-paper-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c n m") #'rx/nexus-paper-set-model)
+    (define-key map (kbd "C-c n a") #'rx/nexus-paper-add-context)
+    (define-key map (kbd "C-c n s") #'rx/nexus-paper-manage-mcp)
+    (define-key map (kbd "C-c n q") #'rx/nexus-paper-quit)
+    map)
+  "Keymap for `nexus-paper-mode'.")
+
+(define-minor-mode nexus-paper-mode
+  "Minor mode for Nexus-Paper chat buffers."
+  :lighter " Nexus"
+  :keymap nexus-paper-mode-map)
+
+(defun rx/nexus-paper-set-model ()
+  "Interactively set the gptel model and backend for the current Nexus session."
+  (interactive)
+  (let* ((backend-name (completing-read "Select Backend: " 
+                                        (mapcar (lambda (b) (symbol-name (gptel-backend-name b))) 
+                                                gptel-backends)))
+         (backend (cl-find backend-name gptel-backends 
+                           :key (lambda (b) (symbol-name (gptel-backend-name b))) 
+                           :test #'string=))
+         (model (completing-read "Select Model: " (gptel-backend-models backend))))
+    (setq-local gptel-backend backend)
+    (setq-local gptel-model model)
+    (nexus-paper--log "Model updated to %s (%s)" model backend-name)
+    (message "Nexus-Paper: Model set to %s" model)))
+
+(defun rx/nexus-paper-add-context ()
+  "Interactively add context to the current Nexus session."
+  (interactive)
+  (call-interactively #'gptel-add)
+  (nexus-paper--log "Additional context added via gptel-add."))
+
+(defun rx/nexus-paper-manage-mcp ()
+  "Interactively manage (restart/register) the MCP server."
+  (interactive)
+  (if (y-or-n-p "Restart current Graphlit MCP server? ")
+      (progn
+        (nexus-paper--register-mcp-server)
+        (message "Nexus-Paper: MCP server restarted."))
+    (message "Nexus-Paper: MCP management cancelled.")))
 
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here
