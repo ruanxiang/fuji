@@ -23,6 +23,11 @@
 (require 'mcp)
 (require 'gptel)
 (require 'gptel-openai)
+(require 'gptel-context nil t)
+
+;; Phase 42: Global threshold to prevent "Argument list too long" (vfork)
+;; This forces gptel to always use temporary files for curl payloads.
+(setq gptel-curl-file-size-threshold 0)
 
 (require 'auth-source)
 (require 'subr-x)
@@ -83,20 +88,32 @@ If nil, use the default model for the vision backend."
   :type 'string
   :group 'nexus-paper)
 
+(defcustom nexus-paper-chat-mode 'hybrid
+  "The chat mode for Nexus-Paper.
+- `proxy': Standard RAG proxy mode (Graphlit is the backend).
+- `hybrid': Local context injection mode (Standard gptel backend + Graphlit tool)."
+  :type '(choice (const :tag "Hybrid (Recommended)" hybrid)
+                 (const :tag "Proxy (Original)" proxy))
+  :group 'nexus-paper)
+
 (defconst nexus-paper-progress-buffer "*Nexus Progress*")
+
+(defvar-local nexus-paper--content-id nil "Graphlit content ID for current session.")
+(defvar-local nexus-paper--filename nil "Filename of the paper being read.")
+(defvar-local nexus-paper--results-dir nil "Cache directory for Marker results.")
+(defvar-local nexus-paper--pdf-buffer nil "Buffer containing the source PDF.")
+(defvar-local nexus-paper--prog-buffer nil "Buffer for progress logging.")
+(defvar-local nexus-paper--context-buffer nil "Hidden buffer containing paper content for gptel context.")
+
 
 (defun nexus-paper--log (format-string &rest args)
   "Log a message to the Nexus Progress buffer."
-  (let* ((multibyte-fmt (nexus-paper--normalize-string format-string))
-         (msg (nexus-paper--normalize-string (apply #'format multibyte-fmt args)))
+  (let* ((msg (apply #'format format-string args))
          (timestamp (format-time-string "[%H:%M:%S] ")))
     (with-current-buffer (get-buffer-create nexus-paper-progress-buffer)
       (let ((inhibit-read-only t))
-        ;; CRITICAL: Ensure buffer is multibyte before inserting potentially multibyte text.
-        (unless enable-multibyte-characters
-          (set-buffer-multibyte t)
-          (setq-local buffer-file-coding-system 'utf-8)
-          (setq-local default-buffer-file-coding-system 'utf-8))
+        ;; CRITICAL: Ensure buffer is multibyte before inserting.
+        (unless enable-multibyte-characters (set-buffer-multibyte t))
         (goto-char (point-max))
         (insert timestamp msg "\n")
         (let ((win (get-buffer-window (current-buffer) t)))
@@ -467,15 +484,9 @@ favoring bib-search integration if available."
       (expand-file-name (substitute-in-file-name (expand-file-name file)))))))
 
 (defun nexus-paper--normalize-string (s)
-  "Ensure S is a multibyte UTF-8 string."
+  "Ensure S is a multibyte string."
   (if (and s (stringp s))
-      (let ((result (if (multibyte-string-p s)
-                        s
-                      (decode-coding-string s 'utf-8))))
-        ;; Ensure it's ALWAYS multibyte to prevent concatenation issues
-        (if (multibyte-string-p result)
-            result
-          (string-to-multibyte result)))
+      (if (multibyte-string-p s) s (decode-coding-string s 'utf-8))
     ""))
 
 (defun nexus-paper--mcp-parse-result (result)
@@ -819,7 +830,7 @@ Please explain the figure based on the image and the provided context."
          (model (or nexus-paper-gptel-vision-model gptel-model)))
     
     (gptel-request 
-        vision-prompt
+            vision-prompt
       :callback (lambda (response info)
                   (if (plist-get info :error)
                       (funcall error-callback (plist-get info :error))
@@ -829,11 +840,23 @@ Please explain the figure based on the image and the provided context."
       :model model)))
 
 (defun nexus-paper--cleanup-session ()
-  "Prompt to delete Graphlit content on buffer kill."
-  (when (and nexus-paper--content-id
-             (y-or-n-p "Nexus-Paper: Delete paper content from Graphlit to save quota? "))
-    (message "Nexus-Paper: Deleting content %s..." nexus-paper--content-id)
-    (nexus-paper--delete-from-graphlit nexus-paper--content-id)))
+  "Prompt to delete Graphlit content on buffer kill.
+Also clears any global gptel context to ensure a clean exit."
+  (let* ((filename nexus-paper--filename)
+         (content-id nexus-paper--content-id)
+         (ctx-buf nexus-paper--context-buffer))
+    (nexus-paper--log "Session cleanup for: %s" filename)
+    ;; 1. Remove all gptel context items
+    (when (fboundp 'gptel-context-remove-all)
+      (gptel-context-remove-all))
+    ;; 2. Kill hidden context buffer if any
+    (when (buffer-live-p ctx-buf)
+      (kill-buffer ctx-buf))
+    ;; 3. Prompt for Graphlit cleanup
+    (when (and content-id
+               (y-or-n-p "Nexus-Paper: Delete paper content from Graphlit to save quota? "))
+      (message "Nexus-Paper: Deleting content %s..." content-id)
+      (nexus-paper--delete-from-graphlit content-id))))
 
 ;;;###autoload
 (defun rx/nexus-paper-quit ()
@@ -865,9 +888,8 @@ Prompts for content deletion and kills related buffers."
           (mcp-async-call-tool conn "deleteContent"
                                `((id . ,content-id))
                                (lambda (result)
-                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
-                                        (id (and parsed (cdr (assoc 'id parsed)))))
-                                   (nexus-paper--log "[SUCCESS] Content deleted: %s" id)))
+                                 (let* ((parsed (nexus-paper--mcp-parse-result result)))
+                                   (nexus-paper--log "[SUCCESS] Content deleted: %s" (cdr (assoc 'id parsed)))))
                                (lambda (err)
                                  (nexus-paper--log "[FAILURE] Delete failed: %s" (error-message-string err))))
         (error
@@ -884,6 +906,28 @@ Prompts for content deletion and kills related buffers."
     (save-excursion
       (goto-char (point-min))
       (insert header))))
+
+(defun nexus-paper-query-graphlit (query)
+  "Search the research paper for specific details using Graphlit RAG.
+This is used as a gptel tool in hybrid mode."
+  (let* ((conn (nexus-paper--get-mcp-connection))
+         (content-id nexus-paper--content-id))
+    (unless content-id
+      (error "Nexus-Paper: Content ID not found in current buffer"))
+    (let ((result (mcp-call-tool conn "promptConversation"
+                                `((prompt . ,query)
+                                  (contentIds . [,content-id])))))
+      (nexus-paper--mcp-parse-result result))))
+
+(defvar nexus-paper-gptel-tool-graphlit
+  (when (fboundp 'gptel-make-tool)
+    (gptel-make-tool
+     :name "query_graphlit"
+     :function #'nexus-paper-query-graphlit
+     :description "Search the research paper for specific details using RAG. Use this when the provided local context is insufficient or when you need to verify facts across the entire document."
+     :args '((:name "query" :type string :description "The search query to look up in the paper database"))
+     :category "research"))
+  "The gptel tool for Graphlit RAG retrieval.")
 
 ;;;###autoload
 (defun rx/gptel-ref-chat ()
@@ -939,23 +983,49 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                       (set-buffer-multibyte t)
                       (erase-buffer)
                       (org-mode)
-                    (gptel-mode)
-                    (setq-local nexus-paper--content-id content-id)
-                    (setq-local nexus-paper--filename filename)
-                    (setq-local nexus-paper--results-dir results-dir)
-                    (setq-local nexus-paper--pdf-buffer pdf-buffer)
-                    (setq-local nexus-paper--prog-buffer prog-buffer)
-                    (setq-local gptel-backend (make-nexus-gptel-backend
-                                               :name "Nexus-Graphlit"
-                                               :models '(Graphlit-RAG)))
-                    (setq-local gptel-model 'Graphlit-RAG)
-                    (nexus-paper--setup-buffer-header filename content-id)
-                    (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
-                    (nexus-paper--log "[SUCCESS] Chat initialization complete. Ready!")
-                    (goto-char (point-max))
-                    ;; Auto-focus the chat window
-                    (when-let* ((win (get-buffer-window chat-buffer)))
-                      (select-window win))))))))))
+                      
+                      (setq-local nexus-paper--content-id content-id)
+                      (setq-local nexus-paper--filename filename)
+                      (setq-local nexus-paper--results-dir results-dir)
+                      (setq-local nexus-paper--pdf-buffer pdf-buffer)
+                      (setq-local nexus-paper--prog-buffer prog-buffer)
+                      
+                      (if (eq nexus-paper-chat-mode 'hybrid)
+                          (progn
+                             (let* ((md-file (expand-file-name (concat (file-name-base pdf-file) ".md")
+                                                              nexus-paper--results-dir)))
+                               (with-temp-file md-file
+                                 (insert md-content))
+                               ;; Add the extracted MD file as context silently
+                               (when (fboundp 'gptel-add-file)
+                                 (let ((inhibit-message t))
+                                   (gptel-add-file md-file))))
+                            
+                            ;; 3. Configure system directive
+                            (setq-local gptel-directives 
+                                        (cons '(nexus-paper . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
+                                              gptel-directives))
+                            (setq-local gptel-default-directive 'nexus-paper)
+                            
+                            ;; 4. Register Graphlit as a gptel tool if available
+                            (when (and (boundp 'gptel-tools) nexus-paper-gptel-tool-graphlit)
+                              (setq-local gptel-tools (list nexus-paper-gptel-tool-graphlit))))
+                        
+                        ;; Proxy mode logic
+                        (setq-local gptel-backend (make-nexus-gptel-backend
+                                                   :name "Nexus-Graphlit"
+                                                   :models '(Graphlit-RAG)))
+                        (setq-local gptel-model 'Graphlit-RAG))
+                      
+                      (insert "\n* ") ;; Initial user prompt
+                      (gptel-mode)
+                      (nexus-paper--setup-buffer-header filename content-id)
+                      (add-hook 'kill-buffer-hook #'nexus-paper--cleanup-session nil t)
+                      (nexus-paper--log "[SUCCESS] Chat initialization complete. Ready!")
+                      (goto-char (point-max))
+                      ;; Auto-focus the chat window
+                      (when-let* ((win (get-buffer-window chat-buffer)))
+                        (select-window win))))))))))
 
       (pcase mode
         ('auto
