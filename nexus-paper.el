@@ -1078,12 +1078,13 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
 (defun rx/nexus-paper-set-model ()
   "Interactively set the gptel model and backend for the current Nexus session."
   (interactive)
-  (let* ((backend-name (completing-read "Select Backend: " 
-                                        (mapcar (lambda (b) (symbol-name (gptel-backend-name b))) 
-                                                gptel-backends)))
-         (backend (cl-find backend-name gptel-backends 
-                           :key (lambda (b) (symbol-name (gptel-backend-name b))) 
-                           :test #'string=))
+  (let* ((backends gptel--known-backends)
+         (backend-name (completing-read "Select Backend: " 
+                                         (mapcar (lambda (b) (symbol-name (gptel-backend-name (cdr b)))) 
+                                                 backends)))
+         (backend (cdr (assoc backend-name 
+                              (mapcar (lambda (b) (cons (symbol-name (gptel-backend-name (cdr b))) (cdr b))) 
+                                      backends))))
          (model (completing-read "Select Model: " (gptel-backend-models backend))))
     (setq-local gptel-backend backend)
     (setq-local gptel-model model)
@@ -1091,10 +1092,19 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
     (message "Nexus-Paper: Model set to %s" model)))
 
 (defun rx/nexus-paper-add-context ()
-  "Interactively add context to the current Nexus session."
+  "Interactively add a file as context to the current Nexus session."
   (interactive)
-  (call-interactively #'gptel-add)
-  (nexus-paper--log "Additional context added via gptel-add."))
+  (let ((file (read-file-name "Add file to context: ")))
+    (cond
+     ((string-match-p "\\.\\(pdf\\|docx\\|pptx\\|xlsx\\|epub\\|mobi\\)$" (downcase file))
+      (message "Nexus-Paper: [WARNING] gptel cannot process binary formats (PDF/DOCX) directly. Please extract to Markdown/Text first.")
+      (when (y-or-n-p "Attempt to add anyway? ")
+        (gptel-add-file file)
+        (nexus-paper--log "Context added (Binary?): %s" (file-name-nondirectory file))))
+     (t
+      (gptel-add-file file)
+      (nexus-paper--log "Context added: %s" (file-name-nondirectory file))
+      (message "Nexus-Paper: File '%s' added to context." (file-name-nondirectory file))))))
 
 (defun rx/nexus-paper-manage-mcp ()
   "Interactively manage (restart/register) the MCP server."
