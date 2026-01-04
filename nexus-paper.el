@@ -96,6 +96,18 @@ If nil, use the default model for the vision backend."
                  (const :tag "Proxy (Original)" proxy))
   :group 'nexus-paper)
 
+(defcustom nexus-paper-gptel-backend nil
+  "The default gptel backend name for chat sessions."
+  :type '(choice (const :tag "Default (gptel-backend)" nil)
+                 string)
+  :group 'nexus-paper)
+
+(defcustom nexus-paper-gptel-model nil
+  "The default gptel model name for chat sessions."
+  :type '(choice (const :tag "Default (gptel-model)" nil)
+                 string)
+  :group 'nexus-paper)
+
 (defconst nexus-paper-progress-buffer "*Nexus Progress*")
 
 (defvar-local nexus-paper--content-id nil "Graphlit content ID for current session.")
@@ -155,15 +167,27 @@ If nil, use the default model for the vision backend."
   "Interactively configure or modify Nexus-Paper settings."
   (interactive)
   (let* ((auth (condition-case nil (nexus-paper--get-auth "graphlit") (error nil)))
+         (backends (mapcar (lambda (b) (gptel-backend-name (cdr b))) gptel--known-backends))
          (marker-path (read-file-name "Path to Marker (marker_single preferred): " 
-                                      (file-name-directory (or nexus-paper-marker-executable ""))
-                                      nexus-paper-marker-executable t))
+                                       (file-name-directory (or nexus-paper-marker-executable ""))
+                                       nexus-paper-marker-executable t))
          (bib-path (read-directory-name "Directory for BibTeX files: " 
                                         nexus-paper-bib-path nexus-paper-bib-path t))
-         (vis-backend (completing-read "Vision Backend (gptel): " 
-                                       '("openai" "gemini" "anthropic" "ollama") 
-                                       nil nil (symbol-name (or nexus-paper-gptel-vision-backend 'nil))))
-         (vis-model (read-string "Vision Model: " (or nexus-paper-gptel-vision-model "")))
+         
+         ;; Chat Model Config
+         (chat-backend-name (completing-read "Default Chat Backend: " backends nil t (or nexus-paper-gptel-backend "")))
+         (chat-backend (gptel-get-backend chat-backend-name))
+         (chat-model (completing-read "Default Chat Model: " (gptel-backend-models chat-backend) nil t (or nexus-paper-gptel-model "")))
+         
+         ;; Vision Model Config
+         (vis-backend-name (completing-read "Vision Backend (Multimodal): " backends nil t 
+                                            (or (and nexus-paper-gptel-vision-backend 
+                                                     (symbolp nexus-paper-gptel-vision-backend)
+                                                     (symbol-name nexus-paper-gptel-vision-backend))
+                                                "")))
+         (vis-backend (gptel-get-backend vis-backend-name))
+         (vis-model (completing-read "Vision Model: " (gptel-backend-models vis-backend) nil t (or nexus-paper-gptel-vision-model "")))
+         
          (org-id (read-string "Graphlit Organization ID: " (or (plist-get auth :user) "")))
          (secret (let ((s (read-passwd (format "Graphlit JWT Secret %s: " 
                                                (if (plist-get auth :secret) "(leave empty to keep current)" "")))))
@@ -177,8 +201,12 @@ If nil, use the default model for the vision backend."
     (customize-save-variable 'nexus-paper-bib-path (expand-file-name bib-path))
     (customize-save-variable 'nexus-paper-graphlit-environment-id env-id)
     (customize-save-variable 'nexus-paper-cache-directory (expand-file-name cache-dir))
-    (unless (string= vis-backend "nil")
-      (customize-save-variable 'nexus-paper-gptel-vision-backend (intern vis-backend)))
+    
+    (customize-save-variable 'nexus-paper-gptel-backend chat-backend-name)
+    (customize-save-variable 'nexus-paper-gptel-model chat-model)
+    
+    (unless (string-empty-p vis-backend-name)
+      (customize-save-variable 'nexus-paper-gptel-vision-backend (intern vis-backend-name)))
     (unless (string-empty-p vis-model)
       (customize-save-variable 'nexus-paper-gptel-vision-model vis-model))
     
@@ -1001,6 +1029,13 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                                  (let ((inhibit-message t))
                                    (gptel-add-file md-file))))
                             
+                            ;; Apply configured Backend & Model
+                            (when nexus-paper-gptel-backend
+                              (let ((be (gptel-get-backend nexus-paper-gptel-backend)))
+                                (when be (setq-local gptel-backend be))))
+                            (when nexus-paper-gptel-model
+                              (setq-local gptel-model nexus-paper-gptel-model))
+
                             ;; 3. Configure system directive
                             (setq-local gptel-directives 
                                         (cons '(nexus-paper . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
@@ -1080,11 +1115,9 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
   (interactive)
   (let* ((backends gptel--known-backends)
          (backend-name (completing-read "Select Backend: " 
-                                         (mapcar (lambda (b) (symbol-name (gptel-backend-name (cdr b)))) 
+                                         (mapcar (lambda (b) (gptel-backend-name (cdr b))) 
                                                  backends)))
-         (backend (cdr (assoc backend-name 
-                              (mapcar (lambda (b) (cons (symbol-name (gptel-backend-name (cdr b))) (cdr b))) 
-                                      backends))))
+         (backend (gptel-get-backend backend-name))
          (model (completing-read "Select Model: " (gptel-backend-models backend))))
     (setq-local gptel-backend backend)
     (setq-local gptel-model model)
