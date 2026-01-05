@@ -568,6 +568,7 @@ Call CALLBACK with content-id on success."
                               (progn
                                 (nexus-paper--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
                                 ;; Save metadata to cache
+                                (message "Nexus-Paper: [DEBUG] Saving metadata: id=%s, filename=%s, path=%s" content-id filename pdf-path)
                                 (nexus-paper--add-metadata-entry content-id filename pdf-path)
                                 (funcall callback content-id))
                             (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
@@ -1278,6 +1279,8 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
     ;; Add or update entry
     (setq cache (cons (cons content-id metadata)
                       (assoc-delete-all content-id cache)))
+    (message "Nexus-Paper: [DEBUG] Cache file: %s" (nexus-paper--get-metadata-cache-file))
+    (message "Nexus-Paper: [DEBUG] Cache content: %S" cache)
     (nexus-paper--save-metadata-cache cache)
     (message "Nexus-Paper: Saved metadata for %s" filename)))
 
