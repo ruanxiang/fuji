@@ -1162,5 +1162,172 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
         (message "Nexus-Paper: MCP server restarted."))
     (message "Nexus-Paper: MCP management cancelled.")))
 
+;;; Graphlit Content Management UI
+
+(defvar nexus-paper--content-list nil
+  "List of content items from Graphlit.
+Each item is an alist with keys: id, name, createdDate, fileSize, state.")
+
+(defvar nexus-paper-library-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'nexus-paper-library-refresh)
+    (define-key map (kbd "d") #'nexus-paper-library-mark-delete)
+    (define-key map (kbd "u") #'nexus-paper-library-unmark)
+    (define-key map (kbd "U") #'nexus-paper-library-unmark-all)
+    (define-key map (kbd "x") #'nexus-paper-library-execute)
+    (define-key map (kbd "RET") #'nexus-paper-library-view-details)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `nexus-paper-library-mode'.")
+
+(define-derived-mode nexus-paper-library-mode tabulated-list-mode "Nexus-Library"
+  "Major mode for managing Graphlit content.
+\\{nexus-paper-library-mode-map}"
+  (setq tabulated-list-format
+        [("Title" 40 t)
+         ("ID" 12 nil)
+         ("Date" 12 t)
+         ("Size" 10 t)
+         ("State" 10 t)])
+  (setq tabulated-list-padding 2)
+  (setq tabulated-list-sort-key (cons "Date" t))
+  (tabulated-list-init-header))
+
+(defun nexus-paper--query-all-contents (callback)
+  "Query all content from Graphlit via MCP and call CALLBACK with results."
+  (let ((conn (nexus-paper--get-mcp-connection)))
+    (when conn
+      (condition-case err
+          (mcp-async-call-tool conn "queryContents"
+                               '()  ; No arguments needed for listing all
+                               (lambda (result)
+                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
+                                        (contents (cdr (assoc 'contents parsed))))
+                                   (if contents
+                                       (funcall callback contents)
+                                     (message "Nexus-Paper: No content found in Graphlit")
+                                     (funcall callback nil))))
+                               (lambda (err)
+                                 (message "Nexus-Paper: Failed to query contents: %s" 
+                                          (error-message-string err))
+                                 (funcall callback nil)))
+        (error
+         (message "Nexus-Paper: Query error: %s" (error-message-string err))
+         (funcall callback nil))))))
+
+(defun nexus-paper--format-file-size (bytes)
+  "Format BYTES as human-readable file size."
+  (cond
+   ((>= bytes 1073741824) (format "%.1f GB" (/ bytes 1073741824.0)))
+   ((>= bytes 1048576) (format "%.1f MB" (/ bytes 1048576.0)))
+   ((>= bytes 1024) (format "%.1f KB" (/ bytes 1024.0)))
+   (t (format "%d B" bytes))))
+
+(defun nexus-paper--format-date (iso-date)
+  "Format ISO-DATE string to readable format."
+  (if (stringp iso-date)
+      (substring iso-date 0 10)  ; Extract YYYY-MM-DD
+    "N/A"))
+
+(defun nexus-paper-library-refresh ()
+  "Refresh the Graphlit content list."
+  (interactive)
+  (message "Nexus-Paper: Querying Graphlit...")
+  (nexus-paper--query-all-contents
+   (lambda (contents)
+     (setq nexus-paper--content-list contents)
+     (nexus-paper-library--populate-buffer)
+     (message "Nexus-Paper: Refreshed (%d items)" (length contents)))))
+
+(defun nexus-paper-library--populate-buffer ()
+  "Populate the library buffer with content list."
+  (let ((entries
+         (mapcar
+          (lambda (item)
+            (let* ((id (cdr (assoc 'id item)))
+                   (name (or (cdr (assoc 'name item)) "Untitled"))
+                   (date (nexus-paper--format-date (cdr (assoc 'createdDate item))))
+                   (size (nexus-paper--format-file-size (or (cdr (assoc 'fileSize item)) 0)))
+                   (state (or (cdr (assoc 'state item)) "UNKNOWN"))
+                   (id-short (substring id 0 (min 8 (length id)))))
+              (list id (vector name id-short date size state))))
+          nexus-paper--content-list)))
+    (setq tabulated-list-entries entries)
+    (tabulated-list-print t)))
+
+(defun nexus-paper-library-mark-delete ()
+  "Mark the current entry for deletion."
+  (interactive)
+  (tabulated-list-put-tag "D" t))
+
+(defun nexus-paper-library-unmark ()
+  "Unmark the current entry."
+  (interactive)
+  (tabulated-list-put-tag " " t))
+
+(defun nexus-paper-library-unmark-all ()
+  "Unmark all entries."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (not (eobp))
+      (tabulated-list-put-tag " ")
+      (forward-line 1)))
+  (message "All marks cleared"))
+
+(defun nexus-paper-library-execute ()
+  "Execute marked deletions."
+  (interactive)
+  (let ((marked-ids '()))
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (when (eq (char-after) ?D)
+          (push (tabulated-list-get-id) marked-ids))
+        (forward-line 1)))
+    (if (null marked-ids)
+        (message "No items marked for deletion")
+      (when (yes-or-no-p (format "Delete %d item(s) from Graphlit? " (length marked-ids)))
+        (dolist (id marked-ids)
+          (nexus-paper--delete-from-graphlit id))
+        (message "Nexus-Paper: Deleting %d items..." (length marked-ids))
+        ;; Refresh after a short delay to allow deletions to complete
+        (run-with-timer 2 nil #'nexus-paper-library-refresh)))))
+
+(defun nexus-paper-library-view-details ()
+  "View detailed information about the current entry."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (item (cl-find id nexus-paper--content-list 
+                        :key (lambda (x) (cdr (assoc 'id x)))
+                        :test #'string=)))
+    (if item
+        (let ((details (format "Content Details\n%s\n\nID: %s\nName: %s\nCreated: %s\nSize: %s\nState: %s\nType: %s"
+                               (make-string 60 ?=)
+                               (cdr (assoc 'id item))
+                               (cdr (assoc 'name item))
+                               (cdr (assoc 'createdDate item))
+                               (nexus-paper--format-file-size (or (cdr (assoc 'fileSize item)) 0))
+                               (cdr (assoc 'state item))
+                               (cdr (assoc '__typename item)))))
+          (with-current-buffer (get-buffer-create "*Nexus-Content-Details*")
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert details)
+              (goto-char (point-min))
+              (view-mode))
+            (display-buffer (current-buffer))))
+      (message "No details available"))))
+
+;;;###autoload
+(defun nexus-paper-manage-content ()
+  "Open the Graphlit content management interface."
+  (interactive)
+  (let ((buf (get-buffer-create "*Nexus-Library*")))
+    (with-current-buffer buf
+      (nexus-paper-library-mode)
+      (nexus-paper-library-refresh))
+    (switch-to-buffer buf)))
+
 (provide 'nexus-paper)
 ;;; nexus-paper.el ends here

@@ -12,7 +12,8 @@ Closed on 2025-12-24.
 - [X] Ingestion success recognition fixed
 - [X] Context-aware chat implemented
 
-** TODO Implement "Hybrid Context Mode"
+** DONE Implement "Hybrid Context Mode"
+Closed on 2026-01-05.
 Shift from "Pure Proxy" to "Hybrid Argumentation".
 1. Inject Marker/pdftotext markdown output directly into the *Nexus-Chat* buffer as system context.
 2. Configure gptel to use standard backends (e.g., OpenAI, Anthropic) instead of solely delegating to Graphlit.
