@@ -1228,8 +1228,8 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                                           (error-message-string err))
                                  (funcall callback nil)))
         (error
-         (nexus-paper--log "[FAILURE] Vision API error: %s" (error-message-string err))
-         (funcall callback nil)))))
+         (message "Nexus-Paper: Query error: %s" (error-message-string err))
+         (funcall callback nil))))))
 
 ;;; Metadata Cache for Content List
 
