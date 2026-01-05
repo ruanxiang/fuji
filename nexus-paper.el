@@ -595,7 +595,7 @@ Call CALLBACK with content-id on success."
         (error
          (let ((err-msg (format "MCP tool session error: %s" (error-message-string err))))
            (nexus-paper--log "[FAILURE] %s" err-msg)
-           (error "Nexus-Paper: %s" err-msg))))))))
+           (error "Nexus-Paper: %s" err-msg))))))
 
 (defvar-local nexus-paper--content-id nil "Graphlit content ID for the current paper.")
 (defvar-local nexus-paper--filename nil "Filename of the current paper.")
