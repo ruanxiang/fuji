@@ -1271,28 +1271,31 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 (defun nexus-paper--add-metadata-entry (content-id filename file-path)
   "Add metadata entry for CONTENT-ID with FILENAME and FILE-PATH."
   (let* ((cache (or (nexus-paper--load-metadata-cache) '()))
+         (id-key (if (stringp content-id) (intern content-id) content-id))
          (file-size (and (file-exists-p file-path) (file-attribute-size (file-attributes file-path))))
          (metadata `((filename . ,filename)
                     (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
                     (file_size . ,(or file-size 0))
                     (local_path . ,file-path))))
     ;; Add or update entry
-    (setq cache (cons (cons content-id metadata)
-                      (assoc-delete-all content-id cache)))
+    (setq cache (cons (cons id-key metadata)
+                      (assoc-delete-all id-key cache)))
     (message "Nexus-Paper: [DEBUG] Cache file: %s" (nexus-paper--get-metadata-cache-file))
-    (message "Nexus-Paper: [DEBUG] Cache content: %S" cache)
+    (message "Nexus-Paper: [DEBUG] Cache content count: %d" (length cache))
     (nexus-paper--save-metadata-cache cache)
     (message "Nexus-Paper: Saved metadata for %s" filename)))
 
 (defun nexus-paper--get-metadata-for-id (content-id)
   "Get metadata for CONTENT-ID from cache. Returns alist or nil."
-  (let ((cache (nexus-paper--load-metadata-cache)))
-    (cdr (assoc content-id cache))))
+  (let* ((cache (nexus-paper--load-metadata-cache))
+         (id-key (if (stringp content-id) (intern content-id) content-id)))
+    (cdr (assoc id-key cache))))
 
 (defun nexus-paper--remove-metadata-entry (content-id)
   "Remove metadata entry for CONTENT-ID from cache."
   (let* ((cache (or (nexus-paper--load-metadata-cache) '()))
-         (updated-cache (assoc-delete-all content-id cache)))
+         (id-key (if (stringp content-id) (intern content-id) content-id))
+         (updated-cache (assoc-delete-all id-key cache)))
     (nexus-paper--save-metadata-cache updated-cache)
     (message "Nexus-Paper: Removed metadata for %s" content-id)))
 
