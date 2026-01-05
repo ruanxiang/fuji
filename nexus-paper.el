@@ -520,7 +520,6 @@ favoring bib-search integration if available."
 (defun nexus-paper--mcp-parse-result (result)
   "Parse the JSON result string from an MCP tool RESULT.
 Handles various formats of RESULT (plists, hash-tables, symbols)."
-  (message "Nexus-Paper: [DEBUG] Raw MCP result: %S" result)
   (let* ((content (or (plist-get result :content)
                       (and (hash-table-p result) (gethash "content" result))
                       (and (vectorp result) result)))
@@ -529,7 +528,6 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
          (text-val (nexus-paper--normalize-string
                     (or (plist-get first-item :text)
                         (and (hash-table-p first-item) (gethash "text" first-item))))))
-    (message "Nexus-Paper: [DEBUG] Extracted text-val: %S" text-val)
     (if (or (string-empty-p text-val) (string= text-val "null"))
         (progn
           (message "Nexus-Paper: Result text is empty or null.")
@@ -537,14 +535,13 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
       (condition-case err
           (let* ((json-object-type 'alist)
                  (parsed (json-read-from-string text-val)))
-            (message "Nexus-Paper: [DEBUG] Parsed JSON: %S" parsed)
             (if (or (assoc 'answer parsed) (assoc 'message parsed) (assoc 'id parsed))
                 parsed
               ;; If it's valid JSON but doesn't have our keys, 
               ;; return the raw text-val as answer for safety
               `((answer . ,text-val) (id . ,(cdr (assoc 'id parsed))))))
         (error 
-         (message "Nexus-Paper: [DEBUG] JSON parse error: %S" err)
+         (message "Nexus-Paper: JSON parse error for result: %S" text-val)
          `((answer . ,text-val) (message . ,text-val)))))))
 
 (defun nexus-paper--ingest-to-graphlit (text filename pdf-path callback)
@@ -557,18 +554,15 @@ Call CALLBACK with content-id on success."
     (unless conn
       (error "Nexus-Paper: MCP connection not available"))
     (message "Nexus-Paper: Calling ingestText for %s (Text len: %d chars)..." filename text-len)
-    (message "Nexus-Paper: [DEBUG] Initiating MCP ingestText call (Len: %d)..." text-len)
     (let* ((timer nil)
            (success-cb (lambda (result)
                         (when timer (cancel-timer timer))
-                        (message "Nexus-Paper: [DEBUG] ingestText SUCCESS callback received.")
                         (let* ((parsed (nexus-paper--mcp-parse-result result))
                                (content-id (and parsed (cdr (assoc 'id parsed)))))
                           (if content-id
                               (progn
                                 (nexus-paper--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
                                 ;; Save metadata to cache
-                                (message "Nexus-Paper: [DEBUG] Saving metadata: id=%s, filename=%s, path=%s" content-id filename pdf-path)
                                 (nexus-paper--add-metadata-entry content-id filename pdf-path)
                                 (funcall callback content-id))
                             (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
@@ -579,7 +573,6 @@ Call CALLBACK with content-id on success."
                               (error "Nexus-Paper: %s" err-msg))))))
              (error-cb (lambda (err)
                          (when timer (cancel-timer timer))
-                         (message "Nexus-Paper: [DEBUG] ingestText ERROR callback: %S" err)
                          (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
                            (nexus-paper--log "[FAILURE] %s" err-msg)
                            (error "Nexus-Paper: %s" err-msg)))))
@@ -630,7 +623,6 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
                                  ,@(when nexus-paper--conversation-id
                                      `((conversationId . ,nexus-paper--conversation-id))))
                                  (lambda (result)
-                                 (message "Nexus-Paper: [DEBUG] MCP success lambda triggered.")
                                  (nexus-paper--log "MCP response received. Rendering...")
                                  (when (buffer-live-p orig-buffer)
                                    (with-current-buffer orig-buffer
@@ -690,7 +682,6 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
   "Parse current buffer backwards from point and return a list of prompts.
 For Nexus, we follow the standard gptel pattern of scanning for 'gptel properties."
   (let ((prompts) (prev-pt (point)))
-    (message "Nexus-Paper: [DEBUG] gptel--parse-buffer called at point %d in buffer %s" (point) (buffer-name))
     (if (or gptel-mode gptel-track-response)
         (while (and (or (not max-entries) (>= max-entries 0))
                     (/= prev-pt (point-min))
@@ -714,9 +705,7 @@ For Nexus, we follow the standard gptel pattern of scanning for 'gptel propertie
       (let ((content (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
         (when (> (length content) 0)
           (push (list :role "user" :content content) prompts))))
-    (message "Nexus-Paper: [DEBUG] gptel--parse-buffer returning %d prompts" (length prompts))
     (dolist (p prompts)
-      (message "Nexus-Paper: [DEBUG] Prompt role: %s, len: %d" (plist-get p :role) (length (plist-get p :content))))
     prompts))
 
 (cl-defmethod gptel--request-data ((_backend nexus-gptel-backend) prompts)
@@ -735,7 +724,6 @@ PROMPT is the user query (string or list of plists). ARGS contains :fsm or direc
     
     ;; Ensure default callback if missing
     (unless (plist-get info :callback)
-      (message "Nexus-Paper: [DEBUG] Missing callback, injecting gptel--insert-response")
       (setq info (plist-put info :callback #'gptel--insert-response))
       (when fsm (setf (gptel-fsm-info fsm) info)))
 
@@ -745,26 +733,21 @@ PROMPT is the user query (string or list of plists). ARGS contains :fsm or direc
            (actual-prompt 
             (cond
              ((stringp prompt)
-              (message "Nexus-Paper: [DEBUG] Processing STRING prompt (len: %d)" (length prompt))
               (if (string-match (concat "[^\0]*" (regexp-quote (string-trim sep)) "[[:space:]\n]*\\([^\0]*\\)") prompt)
                   (match-string 1 prompt)
                 prompt))
              ((listp prompt)
-              (message "Nexus-Paper: [DEBUG] Extracting from LIST prompt (len: %d)" (length prompt))
               (let* ((last-msg (car (last prompt)))
                      (raw-content (cond
                                    ((and (listp last-msg) (plist-get last-msg :content)) (plist-get last-msg :content))
                                    ((stringp last-msg) last-msg)
                                    (t ""))))
-                (message "Nexus-Paper: [DEBUG] Raw content from list (len: %d)" (length raw-content))
                 (if (string-match (concat "[^\0]*" (regexp-quote (string-trim sep)) "[[:space:]\n]*\\([^\0]*\\)") raw-content)
                     (match-string 1 raw-content)
                   raw-content)))
              (t 
-              (message "Nexus-Paper: [DEBUG] Prompt branch fallthrough. Prompt: %S" prompt)
               ""))))
       
-      (message "Nexus-Paper: [DEBUG] Actual Prompt (len: %d): %S" (length actual-prompt) actual-prompt)
       (nexus-paper--log "Nexus-Paper: gptel processing prompt (len: %d)" (length actual-prompt))
 
       (let ((figure-id (nexus-paper--detect-visual-query actual-prompt))
@@ -781,17 +764,12 @@ PROMPT is the user query (string or list of plists). ARGS contains :fsm or direc
                                  (if callback 
                                      (condition-case err
                                          (progn
-                                           (message "Nexus-Paper: [DEBUG] Pre-transition to TYPE. FSM: %S" fsm)
                                            ;; FSM Transition: Move to 'TYPE' state (uppercase in 0.9.x)
                                            (when (and fsm (fboundp 'gptel--fsm-transition))
-                                             (message "Nexus-Paper: [DEBUG] Calling gptel--fsm-transition to TYPE")
                                              (gptel--fsm-transition fsm 'TYPE))
                                            
-                                           (message "Nexus-Paper: [DEBUG] Calling callback: %S" callback)
                                            (funcall callback response info)
-                                           (message "Nexus-Paper: [DEBUG] Callback returned successfully")
                                            
-                                           (message "Nexus-Paper: [DEBUG] Pre-transition to DONE")
                                            ;; FSM Transition: Finalize to 'DONE' state
                                            (when (and fsm (fboundp 'gptel--fsm-transition))
                                              (gptel--fsm-transition fsm 'DONE)))
@@ -1211,7 +1189,6 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
           (mcp-async-call-tool conn "queryContents"
                                '()  ; No arguments needed for listing all
                                (lambda (result)
-                                 (message "Nexus-Paper: [DEBUG] queryContents raw result: %S" result)
                                  ;; queryContents returns multiple text items, each is a separate content object
                                  (let* ((content-array (plist-get result :content))
                                         (contents
@@ -1223,7 +1200,6 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                                                                 (let ((json-object-type 'alist))
                                                                   (json-read-from-string text))
                                                               (error nil))))))
-                                   (message "Nexus-Paper: [DEBUG] Parsed %d content items" (length contents))
                                    (if contents
                                        (funcall callback contents)
                                      (message "Nexus-Paper: No content found in Graphlit")
@@ -1280,8 +1256,6 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
     ;; Add or update entry
     (setq cache (cons (cons id-key metadata)
                       (assoc-delete-all id-key cache)))
-    (message "Nexus-Paper: [DEBUG] Cache file: %s" (nexus-paper--get-metadata-cache-file))
-    (message "Nexus-Paper: [DEBUG] Cache content count: %d" (length cache))
     (nexus-paper--save-metadata-cache cache)
     (message "Nexus-Paper: Saved metadata for %s" filename)))
 
@@ -1329,7 +1303,6 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 
 (defun nexus-paper-library--populate-buffer ()
   "Populate the library buffer with content list."
-  (message "Nexus-Paper: [DEBUG] Populating buffer with %d items" (length nexus-paper--content-list))
   (let ((entries
          (mapcar
           (lambda (item)
@@ -1343,7 +1316,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                             (let ((upload-date (cdr (assoc 'upload_date metadata))))
                               (if (stringp upload-date)
                                   (substring upload-date 0 10)  ; Extract YYYY-MM-DD
-                                "N/A"))
+                                ("N/A")))
                           "N/A"))
                    (size (if metadata
                             (nexus-paper--format-file-size (cdr (assoc 'file_size metadata)))
@@ -1352,11 +1325,9 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                    (id-short (substring id 0 (min 8 (length id)))))
               (list id (vector name id-short date size mime))))
           nexus-paper--content-list)))
-    (message "Nexus-Paper: [DEBUG] Setting %d entries" (length entries))
     (setq tabulated-list-entries entries)
     (tabulated-list-init-header)
-    (tabulated-list-print t)
-    (message "Nexus-Paper: [DEBUG] Table printed")))
+    (tabulated-list-print t)))
 
 (defun nexus-paper-library-mark-delete ()
   "Mark the current entry for deletion."
