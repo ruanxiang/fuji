@@ -520,6 +520,7 @@ favoring bib-search integration if available."
 (defun nexus-paper--mcp-parse-result (result)
   "Parse the JSON result string from an MCP tool RESULT.
 Handles various formats of RESULT (plists, hash-tables, symbols)."
+  (message "Nexus-Paper: [DEBUG] Raw MCP result: %S" result)
   (let* ((content (or (plist-get result :content)
                       (and (hash-table-p result) (gethash "content" result))
                       (and (vectorp result) result)))
@@ -528,19 +529,22 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
          (text-val (nexus-paper--normalize-string
                     (or (plist-get first-item :text)
                         (and (hash-table-p first-item) (gethash "text" first-item))))))
-    (if (string-empty-p text-val)
+    (message "Nexus-Paper: [DEBUG] Extracted text-val: %S" text-val)
+    (if (or (string-empty-p text-val) (string= text-val "null"))
         (progn
-          (message "Nexus-Paper: Result text is empty.")
+          (message "Nexus-Paper: Result text is empty or null.")
           nil)
-      (condition-case nil
+      (condition-case err
           (let* ((json-object-type 'alist)
                  (parsed (json-read-from-string text-val)))
+            (message "Nexus-Paper: [DEBUG] Parsed JSON: %S" parsed)
             (if (or (assoc 'answer parsed) (assoc 'message parsed) (assoc 'id parsed))
                 parsed
               ;; If it's valid JSON but doesn't have our keys, 
               ;; return the raw text-val as answer for safety
               `((answer . ,text-val) (id . ,(cdr (assoc 'id parsed))))))
         (error 
+         (message "Nexus-Paper: [DEBUG] JSON parse error: %S" err)
          `((answer . ,text-val) (message . ,text-val)))))))
 
 (defun nexus-paper--ingest-to-graphlit (text filename callback)
@@ -567,6 +571,9 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
                                    (funcall callback content-id))
                                (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
                                  (nexus-paper--log "[FAILURE] %s" err-msg)
+                                 (nexus-paper--log "[HINT] This usually means Graphlit credentials are invalid or expired.")
+                                 (nexus-paper--log "[HINT] Please run M-x nexus-paper-configure to update credentials.")
+                                 (message "Nexus-Paper: Graphlit returned empty response. Check credentials with M-x nexus-paper-configure")
                                  (error "Nexus-Paper: %s" err-msg))))))
              (error-cb (lambda (err)
                          (when timer (cancel-timer timer))
@@ -900,7 +907,10 @@ Prompts for content deletion and kills related buffers."
     ;; 1. Run cleanup (asks about Graphlit deletion)
     (nexus-paper--cleanup-session)
     
-    ;; 2. Kill buffers
+    ;; 2. Remove the hook to prevent duplicate cleanup when killing buffer
+    (remove-hook 'kill-buffer-hook #'nexus-paper--cleanup-session t)
+    
+    ;; 3. Kill buffers
     (when (buffer-live-p pdf-buf) (kill-buffer pdf-buf))
     (when (buffer-live-p prog-buf) (kill-buffer prog-buf))
     (kill-buffer chat-buf)
@@ -916,8 +926,12 @@ Prompts for content deletion and kills related buffers."
           (mcp-async-call-tool conn "deleteContent"
                                `((id . ,content-id))
                                (lambda (result)
-                                 (let* ((parsed (nexus-paper--mcp-parse-result result)))
-                                   (nexus-paper--log "[SUCCESS] Content deleted: %s" (cdr (assoc 'id parsed)))))
+                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
+                                        (deleted-id (cdr (assoc 'id parsed)))
+                                        (state (cdr (assoc 'state parsed))))
+                                   (if (and deleted-id (string= state "DELETED"))
+                                       (nexus-paper--log "[SUCCESS] Content deleted: %s (state: %s)" deleted-id state)
+                                     (nexus-paper--log "[INFO] Delete operation completed (response: %s)" result))))
                                (lambda (err)
                                  (nexus-paper--log "[FAILURE] Delete failed: %s" (error-message-string err))))
         (error
