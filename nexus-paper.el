@@ -568,6 +568,8 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
                              (if content-id
                                  (progn
                                    (nexus-paper--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
+                                   ;; Save metadata to cache
+                                   (nexus-paper--add-metadata-entry content-id filename nexus-paper--pdf-path)
                                    (funcall callback content-id))
                                (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
                                  (nexus-paper--log "[FAILURE] %s" err-msg)
@@ -930,7 +932,10 @@ Prompts for content deletion and kills related buffers."
                                         (deleted-id (cdr (assoc 'id parsed)))
                                         (state (cdr (assoc 'state parsed))))
                                    (if (and deleted-id (string= state "DELETED"))
-                                       (nexus-paper--log "[SUCCESS] Content deleted: %s (state: %s)" deleted-id state)
+                                       (progn
+                                         (nexus-paper--log "[SUCCESS] Content deleted: %s (state: %s)" deleted-id state)
+                                         ;; Remove from metadata cache
+                                         (nexus-paper--remove-metadata-entry content-id))
                                      (nexus-paper--log "[INFO] Delete operation completed (response: %s)" result))))
                                (lambda (err)
                                  (nexus-paper--log "[FAILURE] Delete failed: %s" (error-message-string err))))
@@ -1223,8 +1228,67 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                                           (error-message-string err))
                                  (funcall callback nil)))
         (error
-         (message "Nexus-Paper: Query error: %s" (error-message-string err))
-         (funcall callback nil))))))
+         (nexus-paper--log "[FAILURE] Vision API error: %s" (error-message-string err))
+         (funcall callback nil)))))
+
+;;; Metadata Cache for Content List
+
+(defun nexus-paper--get-metadata-cache-file ()
+  "Get the path to the metadata cache file."
+  (let ((cache-dir (expand-file-name "~/.cache/nexus-paper")))
+    (unless (file-directory-p cache-dir)
+      (make-directory cache-dir t))
+    (expand-file-name "graphlit-metadata.json" cache-dir)))
+
+(defun nexus-paper--load-metadata-cache ()
+  "Load metadata cache from file. Returns an alist of (content-id . metadata)."
+  (let ((cache-file (nexus-paper--get-metadata-cache-file)))
+    (if (file-exists-p cache-file)
+        (condition-case err
+            (with-temp-buffer
+              (insert-file-contents cache-file)
+              (let ((json-object-type 'alist))
+                (json-read)))
+          (error
+           (message "Nexus-Paper: Failed to load metadata cache: %s" (error-message-string err))
+           nil))
+      nil)))
+
+(defun nexus-paper--save-metadata-cache (cache)
+  "Save metadata CACHE to file."
+  (let ((cache-file (nexus-paper--get-metadata-cache-file)))
+    (condition-case err
+        (with-temp-file cache-file
+          (insert (json-encode cache)))
+      (error
+       (message "Nexus-Paper: Failed to save metadata cache: %s" (error-message-string err))))))
+
+(defun nexus-paper--add-metadata-entry (content-id filename file-path)
+  "Add metadata entry for CONTENT-ID with FILENAME and FILE-PATH."
+  (let* ((cache (or (nexus-paper--load-metadata-cache) '()))
+         (file-size (and (file-exists-p file-path) (file-attribute-size (file-attributes file-path))))
+         (metadata `((filename . ,filename)
+                    (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
+                    (file_size . ,(or file-size 0))
+                    (local_path . ,file-path))))
+    ;; Add or update entry
+    (setq cache (cons (cons content-id metadata)
+                      (assoc-delete-all content-id cache)))
+    (nexus-paper--save-metadata-cache cache)
+    (message "Nexus-Paper: Saved metadata for %s" filename)))
+
+(defun nexus-paper--get-metadata-for-id (content-id)
+  "Get metadata for CONTENT-ID from cache. Returns alist or nil."
+  (let ((cache (nexus-paper--load-metadata-cache)))
+    (cdr (assoc content-id cache))))
+
+(defun nexus-paper--remove-metadata-entry (content-id)
+  "Remove metadata entry for CONTENT-ID from cache."
+  (let* ((cache (or (nexus-paper--load-metadata-cache) '()))
+         (updated-cache (assoc-delete-all content-id cache)))
+    (nexus-paper--save-metadata-cache updated-cache)
+    (message "Nexus-Paper: Removed metadata for %s" content-id)))
+
 
 (defun nexus-paper--format-file-size (bytes)
   "Format BYTES as human-readable file size."
@@ -1260,12 +1324,20 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
          (mapcar
           (lambda (item)
             (let* ((id (cdr (assoc 'id item)))
-                   ;; Use resourceUri as name since fileName is null
-                   (name (or (cdr (assoc 'fileName item)) 
-                            (cdr (assoc 'name item))
-                            (format "Content %s" (substring id 0 8))))
-                   (date "N/A")  ; createdDate not in response
-                   (size "N/A")  ; fileSize not in response
+                   (metadata (nexus-paper--get-metadata-for-id id))
+                   ;; Use cached metadata if available
+                   (name (if metadata
+                            (cdr (assoc 'filename metadata))
+                          (format "Content %s" (substring id 0 8))))
+                   (date (if metadata
+                            (let ((upload-date (cdr (assoc 'upload_date metadata))))
+                              (if (stringp upload-date)
+                                  (substring upload-date 0 10)  ; Extract YYYY-MM-DD
+                                "N/A"))
+                          "N/A"))
+                   (size (if metadata
+                            (nexus-paper--format-file-size (cdr (assoc 'file_size metadata)))
+                          "N/A"))
                    (mime (or (cdr (assoc 'mimeType item)) "unknown"))
                    (id-short (substring id 0 (min 8 (length id)))))
               (list id (vector name id-short date size mime))))
