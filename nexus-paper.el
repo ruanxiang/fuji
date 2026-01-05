@@ -558,11 +558,8 @@ Call CALLBACK with content-id on success."
       (error "Nexus-Paper: MCP connection not available"))
     (message "Nexus-Paper: Calling ingestText for %s (Text len: %d chars)..." filename text-len)
     (message "Nexus-Paper: [DEBUG] Initiating MCP ingestText call (Len: %d)..." text-len)
-    (let ((timer (run-with-timer 60 nil
-                                 (lambda ()
-                                   (nexus-paper--log "[WARNING] Ingestion watchdog triggered: No response from MCP server after 60s.")
-                                   (message "Nexus-Paper: [WARNING] Ingestion taking too long. Check MCP server status."))))
-          (success-cb (lambda (result)
+    (let* ((timer nil)
+           (success-cb (lambda (result)
                         (when timer (cancel-timer timer))
                         (message "Nexus-Paper: [DEBUG] ingestText SUCCESS callback received.")
                         (let* ((parsed (nexus-paper--mcp-parse-result result))
@@ -585,13 +582,18 @@ Call CALLBACK with content-id on success."
                          (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
                            (nexus-paper--log "[FAILURE] %s" err-msg)
                            (error "Nexus-Paper: %s" err-msg)))))
-        (condition-case err
-            (mcp-async-call-tool conn "ingestText"
-                                 `((text . ,text)
-                                   (name . ,filename)
-                                   (type . "Markdown"))
-                                 success-cb
-                                 error-cb)
+      ;; Start the watchdog timer
+      (setq timer (run-with-timer 60 nil
+                                  (lambda ()
+                                    (nexus-paper--log "[WARNING] Ingestion watchdog triggered: No response from MCP server after 60s.")
+                                    (message "Nexus-Paper: [WARNING] Ingestion taking too long. Check MCP server status."))))
+      (condition-case err
+          (mcp-async-call-tool conn "ingestText"
+                               `((text . ,text)
+                                 (name . ,filename)
+                                 (type . "Markdown"))
+                               success-cb
+                               error-cb)
         (error
          (let ((err-msg (format "MCP tool session error: %s" (error-message-string err))))
            (nexus-paper--log "[FAILURE] %s" err-msg)
