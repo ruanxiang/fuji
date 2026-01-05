@@ -547,36 +547,38 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
          (message "Nexus-Paper: [DEBUG] JSON parse error: %S" err)
          `((answer . ,text-val) (message . ,text-val)))))))
 
-(defun nexus-paper--ingest-to-graphlit (text filename callback)
-  "Ingest TEXT into Graphlit with FILENAME via MCP, then call CALLBACK with content ID."
+(defun nexus-paper--ingest-to-graphlit (text filename pdf-path callback)
+  "Ingest TEXT for FILENAME from PDF-PATH to Graphlit via MCP.
+Call CALLBACK with content-id on success."
   (nexus-paper--ensure-config)
   (nexus-paper--log "[STEP 2/3] Ingesting content via MCP tool 'ingestText'...")
-  (let ((conn (nexus-paper--get-mcp-connection)))
-    (if (not conn)
-        (error "Nexus-Paper: MCP server not connected and couldn't auto-connect. Run M-x nexus-paper-configure")
-      (nexus-paper--log "Nexus-Paper: Calling ingestText for %s (Text len: %d chars)..." filename (length text))
-      (message "Nexus-Paper: [DEBUG] Initiating MCP ingestText call (Len: %d)..." (length text))
-      (let* ((timer (run-with-timer 60 nil 
-                                     (lambda ()
-                                       (nexus-paper--log "[WARNING] Ingestion watchdog triggered: No response from MCP server after 60s.")
-                                       (message "Nexus-Paper: [WARNING] Ingestion taking too long. Check MCP server status."))))
-             (success-cb (lambda (result)
-                           (when timer (cancel-timer timer))
-                           (message "Nexus-Paper: [DEBUG] ingestText SUCCESS callback received.")
-                           (let* ((parsed (nexus-paper--mcp-parse-result result))
-                                  (content-id (and parsed (cdr (assoc 'id parsed)))))
-                             (if content-id
-                                 (progn
-                                   (nexus-paper--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
-                                   ;; Save metadata to cache
-                                   (nexus-paper--add-metadata-entry content-id filename nexus-paper--pdf-path)
-                                   (funcall callback content-id))
-                               (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
-                                 (nexus-paper--log "[FAILURE] %s" err-msg)
-                                 (nexus-paper--log "[HINT] This usually means Graphlit credentials are invalid or expired.")
-                                 (nexus-paper--log "[HINT] Please run M-x nexus-paper-configure to update credentials.")
-                                 (message "Nexus-Paper: Graphlit returned empty response. Check credentials with M-x nexus-paper-configure")
-                                 (error "Nexus-Paper: %s" err-msg))))))
+  (let* ((conn (nexus-paper--get-mcp-connection))
+         (text-len (length text)))
+    (unless conn
+      (error "Nexus-Paper: MCP connection not available"))
+    (message "Nexus-Paper: Calling ingestText for %s (Text len: %d chars)..." filename text-len)
+    (message "Nexus-Paper: [DEBUG] Initiating MCP ingestText call (Len: %d)..." text-len)
+    (let ((timer (run-with-timer 60 nil
+                                 (lambda ()
+                                   (nexus-paper--log "[WARNING] Ingestion watchdog triggered: No response from MCP server after 60s.")
+                                   (message "Nexus-Paper: [WARNING] Ingestion taking too long. Check MCP server status."))))
+          (success-cb (lambda (result)
+                        (when timer (cancel-timer timer))
+                        (message "Nexus-Paper: [DEBUG] ingestText SUCCESS callback received.")
+                        (let* ((parsed (nexus-paper--mcp-parse-result result))
+                               (content-id (and parsed (cdr (assoc 'id parsed)))))
+                          (if content-id
+                              (progn
+                                (nexus-paper--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
+                                ;; Save metadata to cache
+                                (nexus-paper--add-metadata-entry content-id filename pdf-path)
+                                (funcall callback content-id))
+                            (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
+                              (nexus-paper--log "[FAILURE] %s" err-msg)
+                              (nexus-paper--log "[HINT] This usually means Graphlit credentials are invalid or expired.")
+                              (nexus-paper--log "[HINT] Please run M-x nexus-paper-configure to update credentials.")
+                              (message "Nexus-Paper: Graphlit returned empty response. Check credentials with M-x nexus-paper-configure")
+                              (error "Nexus-Paper: %s" err-msg))))))
              (error-cb (lambda (err)
                          (when timer (cancel-timer timer))
                          (message "Nexus-Paper: [DEBUG] ingestText ERROR callback: %S" err)
@@ -1022,7 +1024,7 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                                   (insert-file-contents md-file)
                                   (buffer-string))))
                (nexus-paper--ingest-to-graphlit
-                md-content filename
+                md-content filename pdf-file
                 (lambda (content-id)
                   (nexus-paper--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
                   (with-current-buffer chat-buffer
