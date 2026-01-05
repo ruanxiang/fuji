@@ -1188,7 +1188,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
          ("ID" 12 nil)
          ("Date" 12 t)
          ("Size" 10 t)
-         ("State" 10 t)])
+         ("Type" 20 t)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key (cons "Date" t))
   (tabulated-list-init-header))
@@ -1201,8 +1201,19 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
           (mcp-async-call-tool conn "queryContents"
                                '()  ; No arguments needed for listing all
                                (lambda (result)
-                                 (let* ((parsed (nexus-paper--mcp-parse-result result))
-                                        (contents (cdr (assoc 'contents parsed))))
+                                 (message "Nexus-Paper: [DEBUG] queryContents raw result: %S" result)
+                                 ;; queryContents returns multiple text items, each is a separate content object
+                                 (let* ((content-array (plist-get result :content))
+                                        (contents
+                                         (when (vectorp content-array)
+                                           (cl-loop for item across content-array
+                                                    for text = (plist-get item :text)
+                                                    when (and text (stringp text))
+                                                    collect (condition-case nil
+                                                                (let ((json-object-type 'alist))
+                                                                  (json-read-from-string text))
+                                                              (error nil))))))
+                                   (message "Nexus-Paper: [DEBUG] Parsed %d content items" (length contents))
                                    (if contents
                                        (funcall callback contents)
                                      (message "Nexus-Paper: No content found in Graphlit")
@@ -1233,27 +1244,37 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
   "Refresh the Graphlit content list."
   (interactive)
   (message "Nexus-Paper: Querying Graphlit...")
-  (nexus-paper--query-all-contents
-   (lambda (contents)
-     (setq nexus-paper--content-list contents)
-     (nexus-paper-library--populate-buffer)
-     (message "Nexus-Paper: Refreshed (%d items)" (length contents)))))
+  (let ((library-buf (get-buffer "*Nexus-Library*")))
+    (nexus-paper--query-all-contents
+     (lambda (contents)
+       (setq nexus-paper--content-list contents)
+       (when (buffer-live-p library-buf)
+         (with-current-buffer library-buf
+           (nexus-paper-library--populate-buffer)))
+       (message "Nexus-Paper: Refreshed (%d items)" (length contents))))))
 
 (defun nexus-paper-library--populate-buffer ()
   "Populate the library buffer with content list."
+  (message "Nexus-Paper: [DEBUG] Populating buffer with %d items" (length nexus-paper--content-list))
   (let ((entries
          (mapcar
           (lambda (item)
             (let* ((id (cdr (assoc 'id item)))
-                   (name (or (cdr (assoc 'name item)) "Untitled"))
-                   (date (nexus-paper--format-date (cdr (assoc 'createdDate item))))
-                   (size (nexus-paper--format-file-size (or (cdr (assoc 'fileSize item)) 0)))
-                   (state (or (cdr (assoc 'state item)) "UNKNOWN"))
+                   ;; Use resourceUri as name since fileName is null
+                   (name (or (cdr (assoc 'fileName item)) 
+                            (cdr (assoc 'name item))
+                            (format "Content %s" (substring id 0 8))))
+                   (date "N/A")  ; createdDate not in response
+                   (size "N/A")  ; fileSize not in response
+                   (mime (or (cdr (assoc 'mimeType item)) "unknown"))
                    (id-short (substring id 0 (min 8 (length id)))))
-              (list id (vector name id-short date size state))))
+              (list id (vector name id-short date size mime))))
           nexus-paper--content-list)))
+    (message "Nexus-Paper: [DEBUG] Setting %d entries" (length entries))
     (setq tabulated-list-entries entries)
-    (tabulated-list-print t)))
+    (tabulated-list-init-header)
+    (tabulated-list-print t)
+    (message "Nexus-Paper: [DEBUG] Table printed")))
 
 (defun nexus-paper-library-mark-delete ()
   "Mark the current entry for deletion."
