@@ -705,8 +705,6 @@ For Nexus, we follow the standard gptel pattern of scanning for 'gptel propertie
       (let ((content (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
         (when (> (length content) 0)
           (push (list :role "user" :content content) prompts))))
-    (dolist (p prompts)
-    prompts))
 
 (cl-defmethod gptel--request-data ((_backend fuji-gptel-backend) prompts)
   "Prepare the data for a Nexus request.
