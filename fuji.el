@@ -1388,8 +1388,8 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
               (insert details)
               (goto-char (point-min))
               (view-mode))
-            (display-buffer (current-buffer))))
-      (message "No details available"))))
+            (display-buffer (current-buffer))))))
+       (message "No details available"))))
 
 ;;;###autoload
 (defun fuji-manage-content ()
