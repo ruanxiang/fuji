@@ -19,11 +19,114 @@ Shift from "Pure Proxy" to "Hybrid Argumentation".
 2. Configure gptel to use standard backends (e.g., OpenAI, Anthropic) instead of solely delegating to Graphlit.
 3. Retain Graphlit MCP as a tool for RAG/Long-term memory retrieval when context window is insufficient.
 
-** TODO Implement Graphlit Content Management UI
+** DONE Implement Graphlit Content Management UI
+Closed on 2026-01-05.
 Essential for users on the free plan to manage quota.
 1. valid implementation: Add  command.
 2. Display a tabulated list of papers (Title, ID, Ingestion Date).
 3. Allow marking items for deletion (bulk delete action via MCP ).
+
+** TODO Digital Library Evolution: From Reader to Knowledge Archive
+Transition the tool into a persistent, multi-format personal library with **plugin-based architecture**.
+
+*** Architecture Overview
+The system uses a **plugin-based design** with abstraction layers:
+- **Extractor Plugins**: Modular text extraction (Marker, pdftotext, Pandoc, etc.)
+- **RAG Backend Plugins**: Swappable knowledge retrieval (Graphlit, future alternatives)
+- **Unified API**: `fuji--extract`, `fuji--rag-query`, etc.
+
+See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2aba4/plugin_architecture.md][Plugin Architecture Design]] for details.
+
+*** Implementation Phases
+
+- [ ] 0. Plugin Foundation (Abstraction Layer)
+  - [ ] Define unified Extractor API (`fuji--extract`)
+  - [ ] Define unified RAG Backend API:
+    - [ ] `fuji--rag-ingest` (upload text)
+    - [ ] `fuji--rag-query` (semantic search)
+    - [ ] `fuji--rag-list` (list all content)
+    - [ ] `fuji--rag-delete` (delete content)
+    - [ ] `fuji--rag-get-metadata` (retrieve metadata)
+  - [ ] Create plugin registry data structures
+  - [ ] Implement dispatcher logic (route calls based on file type and user config)
+  - [ ] Wrap existing code as plugins:
+    - [ ] Marker plugin
+    - [ ] pdftotext plugin
+    - [ ] Pandoc plugin
+    - [ ] Graphlit MCP plugin (implement all RAG API methods)
+  - [ ] **Refactor Library Manager** to use unified APIs:
+    - [ ] Replace `fuji--query-all-contents` with `fuji--rag-list`
+    - [ ] Replace `fuji--delete-from-graphlit` with `fuji--rag-delete`
+    - [ ] Ensure manager is RAG-backend agnostic
+  - [ ] **Runtime Plugin Switching (Hot-Swap)**:
+    - [ ] Implement `fuji-set-extractor` (switch PDF/DOCX extractor on-the-fly)
+    - [ ] Implement `fuji-set-rag-backend` (switch RAG backend on-the-fly)
+    - [ ] Use buffer-local/session variables to override defaults
+    - [ ] Dispatcher checks session override before config defaults
+- [ ] 1. Two-Tier Configuration & Environment
+  - [ ] Implement `rx/fuji-configure` with **two-tier flow**:
+    - [ ] **Tier 1: Tool Selection**
+      - [ ] PDF Extractor: Radio buttons (pdftotext [default], marker)
+      - [ ] DOCX/EPUB/HTML Extractor: Radio buttons (pandoc)
+      - [ ] RAG Backend: Radio buttons (Graphlit [current], Local Vector DB [future])
+    - [ ] **Tier 2: Tool-Specific Configuration** (dynamic based on Tier 1 selection)
+      - [ ] If Marker selected: Binary path (auto-detect + override)
+      - [ ] If pdftotext selected: Binary path (auto-detect)
+      - [ ] If Pandoc selected: Binary path (auto-detect)
+      - [ ] If Graphlit selected: Org ID, Env ID, JWT Secret
+  - [ ] **Smart Defaults & Auto-Detection**:
+    - [ ] Cache Path: Default to `~/.cache/fuji/` (user can override).
+    - [ ] Originals Archive: Default to `originals/` (relative to Cache Path, user can rename).
+    - [ ] pdftotext Binary: Auto-detect (required, fallback if Marker unavailable).
+    - [ ] Marker Binary: Auto-detect from `$PATH` or prompt for manual path.
+    - [ ] Pandoc Binary: Auto-detect using `executable-find`, suggest if found.
+  - [ ] Define persistent variables (saved to custom file or `.emacs.d/`):
+    - [ ] Plugin selections (which extractor/RAG backend for each file type)
+    - [ ] Tool-specific configurations
+
+- [ ] 2. Storage & Archiving (Calibre-style)
+  - [ ] Implement automatic (optional) file archiving to `~/.cache/fuji/originals/`.
+  - [ ] Update metadata cache to track `original_path`, `archived_path`, and `doc_type`.
+  - [ ] Storage Strategy:
+    - [ ] Archive Copy: Copy the original file (PDF/DOCX) to `originals/` folder.
+    - [ ] Handle "Broken Links": 
+      - [ ] If original is missing, try opening the archived copy in `originals/`.
+      - [ ] If archived copy is also missing, fallback to opening the extracted text (Markdown) as read-only.
+- [ ] 3. Multi-Format Expansion (Pandoc Integration)
+  - [ ] Implement "Extractor" abstraction for DOCX, EPUB, and HTML using Pandoc.
+  - [ ] Add support for Web URLs:
+    - [ ] Mode A: Local conversion (via eww/pandoc) -> Upload Markdown.
+    - [ ] Mode B: Remote conversion (Graphlit `ingestUri`) -> **Fetch extracted text back to local cache** for consistency.
+- [ ] 4. Dual Entry Points: Direct File Open & Library Manager
+  - [ ] **Direct File Open Mode** (`M-x fuji-read`):
+    - [ ] Detect if current file is already in library cache.
+    - [ ] If new: Extract -> Upload -> Open Chat Buffer.
+    - [ ] If existing: Restore session -> Reconnect Graphlit context -> Open Chat Buffer.
+  - [ ] **Library Manager Mode** (`M-x fuji-manager`):
+    - [ ] Display tabulated list of all library items.
+    - [ ] Support mark/delete/refresh operations.
+    - [ ] Enter on item: Open original file (if exists) + Chat Buffer side-by-side.
+    - [ ] Exit behavior: Return to Library Manager (no deletion prompts).
+- [ ] 5. Enhanced Library Manager UI
+  - [ ] Support custom "Memo/Notes" field for each library entry.
+  - [ ] Add "Add New File" interactive command from the manager.
+  - [ ] Improved visual layout (Icons/Tags for file types).
+- [ ] 6. Integrated Reading Experience
+  - [ ] Refactor Progress UI: Move status messages from separate buffer to Chat Buffer (Top-level Org block).
+  - [ ] **Chat Session Persistence**:
+    - [ ] Auto-save chat buffer content to a local file (e.g., `[cache]/sessions/[id].org`).
+    - [ ] Auto-load: When re-opening a library item, restore the previous conversation history and reconnect to the Graphlit/gptel context.
+  - [ ] UI Fix: Ensure cursor automatically moves to `point-max` in chat buffers.
+  - [ ] Window Management: Define exit behavior (return to Library Manager or close gracefully).
+- [ ] 7. Long-term Knowledge Strategy
+  - [ ] Default to persistent Graphlit storage (Avoid immediate `fuji--delete-from-graphlit`).
+  - [ ] Implement "Purge" command in manager for manual cleanup.
+- [ ] 8. Command & Namespace Refactoring
+  - [ ] Rename package commands to better reflect the "Library" concept (e.g., `fuji-read`, `fuji-manager`).
+  - [ ] Consolidate command names to be more intuitive for the new workflow.
+- [ ] 9. (Optional/Ambitious) Bibliography & Research Notes
+  - [ ] DOI support: Auto-fetch metadata from CrossRef/OpenAlex.
+  - [ ] Basic `org-ref` compatibility for looking up papers in the library.
 
 ** TODO Universal Reading Workflow Expansion
 *** Universal File Support

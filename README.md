@@ -1,4 +1,4 @@
-# Nexus-Paper: The Ultimate AI-Powered Academic Reading Workflow for Emacs
+# Fuji (负笈) - Your Digital Library
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -52,8 +52,8 @@ graph TD
 ## 📦 Installation & Setup
 
 1. Clone the repository.
-2. Add to your `load-path` and `(require 'nexus-paper)`.
-3. **First-time Setup**: Run `M-x nexus-paper-configure` to set your Marker path and Bibliography directory. These settings will be saved to your Emacs custom file.
+2. Add to your `load-path` and `(require 'fuji)`.
+3. **First-time Setup**: Run `M-x fuji-configure` to set your Marker path and Bibliography directory. These settings will be saved to your Emacs custom file.
 4. **Credentials**: Ensure your Graphlit Organization ID and Secret are in your `~/.authinfo` or `~/.authinfo.gpg`:
 
     ```text
