@@ -20,7 +20,7 @@
 (require 'cl-lib)
 (require 'json)
 (require 'url)
-(require 'mcp)
+(require 'mcp nil t)
 (require 'gptel)
 (require 'gptel-openai)
 (require 'gptel-context nil t)
@@ -657,7 +657,8 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
 
 ;;; gptel Integration
 
-(cl-defstruct (fuji-gptel-backend (:include gptel-backend)))
+;; FIXME: Temporarily disabled - causes load failure when gptel-backend not available
+;; (cl-defstruct (fuji-gptel-backend (:include gptel-backend)))
 
 (require 'gptel-request nil t)
 
@@ -1156,12 +1157,12 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 
 (defvar fuji-library-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "g") #'fuji-library-refresh)
-    (define-key map (kbd "d") #'fuji-library-mark-delete)
-    (define-key map (kbd "u") #'fuji-library-unmark)
-    (define-key map (kbd "U") #'fuji-library-unmark-all)
-    (define-key map (kbd "x") #'fuji-library-execute)
-    (define-key map (kbd "RET") #'fuji-library-view-details)
+    (define-key map (kbd "g") 'fuji-library-refresh)
+    (define-key map (kbd "d") 'fuji-library-mark-delete)
+    (define-key map (kbd "u") 'fuji-library-unmark)
+    (define-key map (kbd "U") 'fuji-library-unmark-all)
+    (define-key map (kbd "x") 'fuji-library-execute)
+    (define-key map (kbd "RET") 'fuji-library-view-details)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `fuji-library-mode'.")
@@ -1179,36 +1180,38 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
   (setq tabulated-list-sort-key (cons "Date" t))
   (tabulated-list-init-header))
 
-(defun fuji--query-all-contents (callback)
-  "Query all content from Graphlit via MCP and call CALLBACK with results."
-  (let ((conn (fuji--get-mcp-connection)))
-    (when conn
-      (condition-case err
-          (mcp-async-call-tool conn "queryContents"
-                               '()  ; No arguments needed for listing all
-                               (lambda (result)
-                                 ;; queryContents returns multiple text items, each is a separate content object
-                                 (let* ((content-array (plist-get result :content))
-                                        (contents
-                                         (when (vectorp content-array)
-                                           (cl-loop for item across content-array
-                                                    for text = (plist-get item :text)
-                                                    when (and text (stringp text))
-                                                    collect (condition-case nil
-                                                                (let ((json-object-type 'alist))
-                                                                  (json-read-from-string text))
-                                                              (error nil))))))
-                                   (if contents
-                                       (funcall callback contents)
-                                     (message "Fuji: No content found in Graphlit")
-                                     (funcall callback nil))))
-                               (lambda (err)
-                                 (message "Fuji: Failed to query contents: %s" 
-                                          (error-message-string err))
-                                 (funcall callback nil)))
-        (error
-         (message "Fuji: Query error: %s" (error-message-string err))
-         (funcall callback nil))))))
+;; DISABLED: This function definition fails to load at this location
+;; See working version at end of file (before provide statement)
+;; (defun fuji--query-all-contents (callback)
+;;   "Query all content from Graphlit via MCP and call CALLBACK with results."
+;;   (let ((conn (fuji--get-mcp-connection)))
+;;     (when conn
+;;       (condition-case err
+;;           (mcp-async-call-tool conn "queryContents"
+;;                                '()  ; No arguments needed for listing all
+;;                                (lambda (result)
+;;                                  ;; queryContents returns multiple text items, each is a separate content object
+;;                                  (let* ((content-array (plist-get result :content))
+;;                                         (contents
+;;                                          (when (vectorp content-array)
+;;                                            (cl-loop for item across content-array
+;;                                                     for text = (plist-get item :text)
+;;                                                     when (and text (stringp text))
+;;                                                     collect (condition-case nil
+;;                                                                 (let ((json-object-type 'alist))
+;;                                                                   (json-read-from-string text))
+;;                                                               (error nil))))))
+;;                                    (if contents
+;;                                        (funcall callback contents)
+;;                                      (message "Fuji: No content found in Graphlit")
+;;                                      (funcall callback nil))))
+;;                                (lambda (err)
+;;                                  (message "Fuji: Failed to query contents: %s" 
+;;                                           (error-message-string err))
+;;                                  (funcall callback nil)))
+;;         (error
+;;          (message "Fuji: Query error: %s" (error-message-string err))
+;;          (funcall callback nil))))))
 
 ;;; Metadata Cache for Content List
 
@@ -1290,14 +1293,15 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
   "Refresh the Graphlit content list."
   (interactive)
   (message "Fuji: Querying Graphlit...")
-  (let ((library-buf (get-buffer "*Fuji-Library*")))
-    (fuji--query-all-contents
-     (lambda (contents)
-       (setq fuji--content-list contents)
-       (when (buffer-live-p library-buf)
-         (with-current-buffer library-buf
-           (fuji-library--populate-buffer)))
-       (message "Fuji: Refreshed (%d items)" (length contents))))))
+  (fuji--query-all-contents
+   (lambda (contents)
+     (setq fuji--content-list contents)
+     (let ((buf (get-buffer "*Fuji-Library*")))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf
+           (fuji-library--populate-buffer))))
+     (message "Fuji: Refreshed (%d items)" (length contents)))))
+
 
 (defun fuji-library--populate-buffer ()
   "Populate the library buffer with content list."
@@ -1434,6 +1438,40 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 (make-obsolete 'rx/nexus-paper-quit 'fuji-quit "0.6.0")
 (make-obsolete 'nexus-paper-library-refresh 'fuji-refresh "0.6.0")
 (make-obsolete 'nexus-paper-library-delete-marked 'fuji-delete-marked "0.6.0")
+
+;;; WORKAROUND: fuji--query-all-contents definition
+;; This function fails to load from its original location (line ~1182)
+;; Adding it here at the end of the file as a workaround
+(defun fuji--query-all-contents (callback)
+  "Query all content from Graphlit via MCP and call CALLBACK with results."
+  (let ((conn (fuji--get-mcp-connection)))
+    (when conn
+      (condition-case err
+          (mcp-async-call-tool conn "queryContents"
+                               '()  ; No arguments needed for listing all
+                               (lambda (result)
+                                 ;; queryContents returns multiple text items, each is a separate content object
+                                 (let* ((content-array (plist-get result :content))
+                                        (contents
+                                         (when (vectorp content-array)
+                                           (cl-loop for item across content-array
+                                                    for text = (plist-get item :text)
+                                                    when (and text (stringp text))
+                                                    collect (condition-case nil
+                                                                (let ((json-object-type 'alist))
+                                                                  (json-read-from-string text))
+                                                              (error nil))))))
+                                   (if contents
+                                       (funcall callback contents)
+                                     (message "Fuji: No content found in Graphlit")
+                                     (funcall callback nil))))
+                               (lambda (err)
+                                 (message "Fuji: Failed to query contents: %s" 
+                                          (error-message-string err))
+                                 (funcall callback nil)))
+        (error
+         (message "Fuji: Query error: %s" (error-message-string err))
+         (funcall callback nil))))))
 
 (provide 'fuji)
 ;;; fuji.el ends here
