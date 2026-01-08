@@ -33,9 +33,33 @@
 (require 'subr-x)
 (require 'ansi-color)
 
+;; Plugin Architecture (Phase 0)
+;; Add the directory containing fuji.el to load-path so plugins can be found
+(let ((fuji-dir (file-name-directory (or load-file-name buffer-file-name))))
+  (add-to-list 'load-path fuji-dir))
+
+(require 'fuji-extractor)
+(require 'fuji-extractor-marker)
+(require 'fuji-extractor-pdftotext)
+(require 'fuji-extractor-pandoc)
+(require 'fuji-rag)
+(require 'fuji-rag-graphlit)
+
 (defgroup fuji nil
   "Customization group for Fuji."
   :group 'external)
+
+;;; Buffer-Local Session Variables
+
+(defvar-local fuji--session-extractor nil
+  "Buffer-local extractor override.
+When set, this extractor will be used instead of the global preference.
+Valid values: \"marker\", \"pdftotext\", \"pandoc\", or nil to use global setting.")
+
+(defvar-local fuji--session-rag-backend nil
+  "Buffer-local RAG backend override.
+When set, this backend will be used instead of the global setting.
+Valid values: \"graphlit\", \"local-vector\", etc., or nil to use global setting.")
 
 ;;;###autoload
 (defcustom fuji-marker-executable (or (executable-find "marker_single")
@@ -1293,10 +1317,11 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
     "N/A"))
 
 (defun fuji-library-refresh ()
-  "Refresh the Graphlit content list."
+  "Refresh the content list from the active RAG backend."
   (interactive)
-  (message "Fuji: Querying Graphlit...")
-  (fuji--query-all-contents
+  (message "Fuji: Querying %s..." fuji-rag-backend)
+  ;; Use unified RAG API instead of Graphlit-specific call
+  (fuji--rag-list
    (lambda (contents)
      (setq fuji--content-list contents)
      (let ((buf (get-buffer "*Fuji-Library*")))
@@ -1366,9 +1391,13 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
         (forward-line 1)))
     (if (null marked-ids)
         (message "No items marked for deletion")
-      (when (yes-or-no-p (format "Delete %d item(s) from Graphlit? " (length marked-ids)))
+      (when (yes-or-no-p (format "Delete %d item(s) from %s? " (length marked-ids) fuji-rag-backend))
+        ;; Use unified RAG API instead of Graphlit-specific call
         (dolist (id marked-ids)
-          (fuji--delete-from-graphlit id))
+          (fuji--rag-delete id (lambda (success)
+                                  (if success
+                                      (message "Fuji: Deleted %s" id)
+                                    (message "Fuji: Failed to delete %s" id)))))
         (message "Fuji: Deleting %d items..." (length marked-ids))
         ;; Refresh after a short delay to allow deletions to complete
         (run-with-timer 2 nil #'fuji-library-refresh)))))
@@ -1476,6 +1505,36 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
          (message "Fuji: Query error: %s" (error-message-string err))
          (funcall callback nil))))))
 
+;;; Session-Specific Plugin Switching
+
+(defun fuji-set-session-extractor (extractor-name)
+  "Set extractor for current buffer/session only.
+EXTRACTOR-NAME should be a registered extractor or empty to clear override."
+  (interactive
+   (list (completing-read "Session extractor (empty to clear): "
+                          (cons "clear" (fuji-list-extractors))
+                          nil t)))
+  (if (or (string-empty-p extractor-name) (string= extractor-name "clear"))
+      (progn
+        (setq-local fuji--session-extractor nil)
+        (message "Fuji: Session extractor override cleared"))
+    (setq-local fuji--session-extractor extractor-name)
+    (message "Fuji: Session extractor set to '%s'" extractor-name)))
+
+(defun fuji-set-session-rag-backend (backend-name)
+  "Set RAG backend for current buffer/session only.
+BACKEND-NAME should be a registered backend or empty to clear override."
+  (interactive
+   (list (completing-read "Session RAG backend (empty to clear): "
+                          (cons "clear" (fuji-list-rag-backends))
+                          nil t)))
+  (if (or (string-empty-p backend-name) (string= backend-name "clear"))
+      (progn
+        (setq-local fuji--session-rag-backend nil)
+        (message "Fuji: Session RAG backend override cleared"))
+    (setq-local fuji--session-rag-backend backend-name)
+    (message "Fuji: Session RAG backend set to '%s'" backend-name)))
+
 (provide 'fuji)
 
 ;;;###autoload
@@ -1528,13 +1587,17 @@ Choose processing mode:
     (fuji--setup-3-buffer-layout pdf-buffer chat-buffer prog-buffer)
     (fuji--log "Workflow started in mode: %s" mode)
 
-    (let ((marker-callback
+    (let ((extraction-callback
            (lambda (md-file)
              (let* ((md-content (with-temp-buffer
                                   (insert-file-contents md-file)
-                                  (buffer-string))))
-               (fuji--ingest-to-graphlit
-                md-content filename pdf-file
+                                  (buffer-string)))
+                    ;; Save metadata for library manager
+                    (metadata `((filename . ,filename)
+                                (pdf-path . ,pdf-file)
+                                (results-dir . ,results-dir))))
+               (fuji--rag-ingest
+                md-content filename metadata
                 (lambda (content-id)
                   (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
                   (with-current-buffer chat-buffer
@@ -1589,23 +1652,19 @@ Choose processing mode:
 
       (pcase mode
         ('auto
-         (fuji--log "[STEP 1/3] Starting Marker processing...")
-         (fuji--process-pdf-with-marker pdf-file
-                                               (lambda (md)
-                                                 (fuji--log "[STEP 2/3] Marker finished. Ingesting content...")
-                                                 (funcall marker-callback md))))
+         (fuji--log "[STEP 1/3] Starting extraction with Marker (async)...")
+         ;; Use Marker extractor with async callback
+         (fuji--marker-extract pdf-file results-dir
+                               (lambda (md-file)
+                                 (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
+                                 (funcall extraction-callback md-file))))
         
         ('skip
-         (fuji--log "[STEP 1/3] Skipping Marker, extracting text directly...")
-         (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
-           (unless (file-directory-p results-dir) (make-directory results-dir t))
-           (with-temp-file md-file
-             (insert "# " filename "\n\n")
-             (insert "> [!NOTE]\n")
-             (insert "> Marker processing skipped. This is a text-only ingestion using pdftotext.\n\n")
-             (insert (fuji--get-pdf-text pdf-file)))
+         (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
+         ;; Use pdftotext extractor explicitly
+         (let ((md-file (fuji--extract pdf-file results-dir "pdftotext")))
            (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
-           (funcall marker-callback md-file)))
+           (funcall extraction-callback md-file)))
         
         ('local
          (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
@@ -1615,7 +1674,7 @@ Choose processing mode:
              (if md-file
                  (progn
                    (fuji--log "[STEP 2/3] Marker results loaded. Ingesting content...")
-                   (funcall marker-callback md-file))
+                   (funcall extraction-callback md-file))
                (error "Fuji: No .md file found in the selected directory!")))))))))
 
 ;;; fuji.el ends here

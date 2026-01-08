@@ -39,30 +39,30 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
 
 *** Implementation Phases
 
-- [ ] 0. Plugin Foundation (Abstraction Layer)
-  - [ ] Define unified Extractor API (`fuji--extract`)
-  - [ ] Define unified RAG Backend API:
-    - [ ] `fuji--rag-ingest` (upload text)
-    - [ ] `fuji--rag-query` (semantic search)
-    - [ ] `fuji--rag-list` (list all content)
-    - [ ] `fuji--rag-delete` (delete content)
-    - [ ] `fuji--rag-get-metadata` (retrieve metadata)
-  - [ ] Create plugin registry data structures
-  - [ ] Implement dispatcher logic (route calls based on file type and user config)
-  - [ ] Wrap existing code as plugins:
-    - [ ] Marker plugin
-    - [ ] pdftotext plugin
-    - [ ] Pandoc plugin
-    - [ ] Graphlit MCP plugin (implement all RAG API methods)
-  - [ ] **Refactor Library Manager** to use unified APIs:
-    - [ ] Replace `fuji--query-all-contents` with `fuji--rag-list`
-    - [ ] Replace `fuji--delete-from-graphlit` with `fuji--rag-delete`
-    - [ ] Ensure manager is RAG-backend agnostic
-  - [ ] **Runtime Plugin Switching (Hot-Swap)**:
-    - [ ] Implement `fuji-set-extractor` (switch PDF/DOCX extractor on-the-fly)
-    - [ ] Implement `fuji-set-rag-backend` (switch RAG backend on-the-fly)
-    - [ ] Use buffer-local/session variables to override defaults
-    - [ ] Dispatcher checks session override before config defaults
+- [X] 0. Plugin Foundation (Abstraction Layer) **COMPLETE**
+  - [X] Define unified Extractor API (`fuji--extract`)
+  - [X] Define unified RAG Backend API:
+    - [X] `fuji--rag-ingest` (upload text)
+    - [X] `fuji--rag-query` (semantic search)
+    - [X] `fuji--rag-list` (list all content)
+    - [X] `fuji--rag-delete` (delete content)
+    - [X] `fuji--rag-get-metadata` (retrieve metadata)
+  - [X] Create plugin registry data structures
+  - [X] Implement dispatcher logic (route calls based on file type and user config)
+  - [X] Wrap existing code as plugins:
+    - [X] Marker plugin
+    - [X] pdftotext plugin
+    - [X] Pandoc plugin
+    - [X] Graphlit MCP plugin (implement all RAG API methods)
+  - [X] **Refactor Library Manager** to use unified APIs:
+    - [X] Replace `fuji--query-all-contents` with `fuji--rag-list`
+    - [X] Replace `fuji--delete-from-graphlit` with `fuji--rag-delete`
+    - [X] Ensure manager is RAG-backend agnostic
+  - [X] **Runtime Plugin Switching (Hot-Swap)**:
+    - [X] Implement `fuji-set-extractor` (switch PDF/DOCX extractor on-the-fly)
+    - [X] Implement `fuji-set-rag-backend` (switch RAG backend on-the-fly)
+    - [X] Use buffer-local/session variables to override defaults
+    - [X] Dispatcher checks session override before config defaults
 - [ ] 1. Two-Tier Configuration & Environment
   - [ ] Implement `fuji-configure` with **two-tier flow**:
     - [ ] **Tier 1: Tool Selection**
