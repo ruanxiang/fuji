@@ -323,11 +323,14 @@ If nil, use the default model for the vision backend."
           
         (let ((conn (gethash fuji-mcp-server-name mcp-server-connections)))
           (if conn
-              (let ((proc (mcp-connection-process conn)))
-                (if (and proc (process-live-p proc))
-                    (insert (format "   [OK] Server '%s' is RUNNING (PID: %d)\n" 
-                                    fuji-mcp-server-name (process-id proc)))
-                  (insert (format "   [FAIL] Server '%s' process is NOT LIVE.\n" fuji-mcp-server-name))))
+              (condition-case err
+                  (let ((proc (mcp-connection-process conn)))
+                    (if (and proc (process-live-p proc))
+                        (insert (format "   [OK] Server '%s' is RUNNING (PID: %d)\n" 
+                                        fuji-mcp-server-name (process-id proc)))
+                      (insert (format "   [FAIL] Server '%s' process is NOT LIVE.\n" fuji-mcp-server-name))))
+                (error
+                 (insert (format "   [WARNING] Server '%s' registered but status unknown\n" fuji-mcp-server-name))))
             (insert (format "   [OFFLINE] Server '%s' not registered.\n" fuji-mcp-server-name))))
         
         (goto-char (point-min))
@@ -871,11 +874,11 @@ Also clears any global gptel context to ensure a clean exit."
     ;; 2. Kill hidden context buffer if any
     (when (buffer-live-p ctx-buf)
       (kill-buffer ctx-buf))
-    ;; 3. Prompt for Graphlit cleanup
-    (when (and content-id
-               (y-or-n-p "Fuji: Delete paper content from Graphlit to save quota? "))
-      (message "Fuji: Deleting content %s..." content-id)
-      (fuji--delete-from-graphlit content-id))))
+    ;; 3. Keep Graphlit content for library management
+    ;; Content can be managed via M-x fuji-manage-content
+    (when content-id
+      (fuji--log "Content preserved in Graphlit: %s (manage via M-x fuji-manage-content)" content-id))))
+
 
 ;;;###autoload
 (defun rx/fuji-quit ()
@@ -1474,4 +1477,145 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
          (funcall callback nil))))))
 
 (provide 'fuji)
+
+;;;###autoload
+(defun fuji-read ()
+  "Start reading and chatting with a research paper.
+
+This is the main entry point for Fuji. It will:
+1. Let you select a PDF file
+2. Process it with Marker (or skip for faster text-only mode)  
+3. Upload to Graphlit for RAG
+4. Open a chat interface
+
+Choose processing mode:
+- Auto: Run Marker for high accuracy with figure support
+- Skip: Use pdftotext for fast text-only processing
+- Local: Load pre-existing Marker output from a directory"
+  (interactive)
+  (fuji--ensure-config)
+  (unless (fuji-verify-environment)
+    (error "Fuji: Environment not ready. Run M-x fuji-configure"))
+  
+  (let* ((pdf-file (fuji--select-pdf))
+         (mode-map '(("Auto (Run Marker) - High accuracy, supports figures" . auto)
+                     ("Skip (pdftotext) - Fast, text only, lower accuracy" . skip)
+                     ("Load Local Result - Use pre-existing Marker output" . local)))
+         (mode-label (completing-read "Marker Mode: " (mapcar #'car mode-map) nil t))
+         (mode (cdr (assoc mode-label mode-map)))
+         (filename (file-name-nondirectory pdf-file))
+         (results-dir (fuji--get-cache-path pdf-file))
+         (pdf-buffer (find-file-noselect pdf-file))
+         (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename)))
+         (prog-buffer (get-buffer-create fuji-progress-buffer)))
+
+    ;; Initial UI Setup
+    (with-current-buffer prog-buffer
+      (let ((inhibit-read-only t))
+        (set-buffer-multibyte t)
+        (erase-buffer)
+        (insert "Fuji Progress: " filename "\n" (make-string 40 ?-) "\n\n")
+        (setq-local cursor-type nil)
+        (view-mode 1)))
+    
+    (with-current-buffer chat-buffer
+      (let ((inhibit-read-only t))
+        (set-buffer-multibyte t)
+        (erase-buffer)
+        (insert "# Waiting for document ingestion...\n\n")
+        (insert "Progress is being tracked in the right buffer.")))
+
+    (fuji--setup-3-buffer-layout pdf-buffer chat-buffer prog-buffer)
+    (fuji--log "Workflow started in mode: %s" mode)
+
+    (let ((marker-callback
+           (lambda (md-file)
+             (let* ((md-content (with-temp-buffer
+                                  (insert-file-contents md-file)
+                                  (buffer-string))))
+               (fuji--ingest-to-graphlit
+                md-content filename pdf-file
+                (lambda (content-id)
+                  (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
+                  (with-current-buffer chat-buffer
+                    (let ((inhibit-read-only t)) 
+                      (set-buffer-multibyte t)
+                      (erase-buffer)
+                      (org-mode)
+                      
+                      (setq-local fuji--content-id content-id)
+                      (setq-local fuji--filename filename)
+                      (setq-local fuji--results-dir results-dir)
+                      (setq-local fuji--pdf-buffer pdf-buffer)
+                      (setq-local fuji--prog-buffer prog-buffer)
+                      
+                      ;; Hybrid mode only (proxy mode disabled)
+                      (let* ((md-file (expand-file-name (concat (file-name-base pdf-file) ".md")
+                                                        fuji--results-dir)))
+                        (with-temp-file md-file
+                          (insert md-content))
+                        ;; Add the extracted MD file as context silently
+                        (when (fboundp 'gptel-add-file)
+                          (let ((inhibit-message t))
+                            (gptel-add-file md-file))))
+                      
+                      ;; Apply configured Backend & Model
+                      (when fuji-gptel-backend
+                        (let ((be (gptel-get-backend fuji-gptel-backend)))
+                          (when be (setq-local gptel-backend be))))
+                      (when fuji-gptel-model
+                        (setq-local gptel-model fuji-gptel-model))
+
+                      ;; Configure system directive
+                      (setq-local gptel-directives 
+                                  (cons '(fuji . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
+                                        gptel-directives))
+                      (setq-local gptel-default-directive 'fuji)
+                      
+                      ;; Register Graphlit as a gptel tool if available
+                      (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                        (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
+                      
+                      (insert "\n* ") ;; Initial user prompt
+                      (gptel-mode)
+                      (fuji-mode 1)
+                      (fuji--setup-buffer-header filename content-id)
+                      (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
+                      (fuji--log "[SUCCESS] Chat initialization complete. Ready!")
+                      (goto-char (point-max))
+                      ;; Auto-focus the chat window
+                      (when-let* ((win (get-buffer-window chat-buffer)))
+                        (select-window win))))))))))
+
+      (pcase mode
+        ('auto
+         (fuji--log "[STEP 1/3] Starting Marker processing...")
+         (fuji--process-pdf-with-marker pdf-file
+                                               (lambda (md)
+                                                 (fuji--log "[STEP 2/3] Marker finished. Ingesting content...")
+                                                 (funcall marker-callback md))))
+        
+        ('skip
+         (fuji--log "[STEP 1/3] Skipping Marker, extracting text directly...")
+         (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
+           (unless (file-directory-p results-dir) (make-directory results-dir t))
+           (with-temp-file md-file
+             (insert "# " filename "\n\n")
+             (insert "> [!NOTE]\n")
+             (insert "> Marker processing skipped. This is a text-only ingestion using pdftotext.\n\n")
+             (insert (fuji--get-pdf-text pdf-file)))
+           (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
+           (funcall marker-callback md-file)))
+        
+        ('local
+         (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
+           (fuji--log "[STEP 1/3] Loading local Marker results from: %s" local-dir)
+           (fuji--use-local-marker-result local-dir results-dir)
+           (let ((md-file (fuji--find-marker-output results-dir)))
+             (if md-file
+                 (progn
+                   (fuji--log "[STEP 2/3] Marker results loaded. Ingesting content...")
+                   (funcall marker-callback md-file))
+               (error "Fuji: No .md file found in the selected directory!")))))))))
+
 ;;; fuji.el ends here
