@@ -675,42 +675,42 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
 
 (advice-add 'gptel--handle-wait :around #'fuji--gptel-handle-wait-advice)
 
-(cl-defmethod gptel-parse-response ((_backend fuji-gptel-backend) response _info)
-  "Extract text from RESPONSE. For Nexus, it's already a string."
-  (if (stringp response) response ""))
+;; DISABLED: (cl-defmethod gptel-parse-response ((_backend fuji-gptel-backend) response _info)
+;; DISABLED:   "Extract text from RESPONSE. For Nexus, it's already a string."
+;; DISABLED:   (if (stringp response) response ""))
 
-(cl-defmethod gptel--parse-buffer ((_backend fuji-gptel-backend) &optional max-entries)
-  "Parse current buffer backwards from point and return a list of prompts.
-For Nexus, we follow the standard gptel pattern of scanning for 'gptel properties."
-  (let ((prompts) (prev-pt (point)))
-    (if (or gptel-mode gptel-track-response)
-        (while (and (or (not max-entries) (>= max-entries 0))
-                    (/= prev-pt (point-min))
-                    (goto-char (max (point-min) 
-                                    (previous-single-property-change
-                                     (point) 'gptel nil (point-min)))))
-          (pcase (get-char-property (point) 'gptel)
-            ('response
-             (let ((content (string-trim (buffer-substring-no-properties (point) prev-pt))))
-               (when (> (length content) 0)
-                 (push (list :role "assistant" :content content) prompts))))
-            ('nil
-             (and max-entries (cl-decf max-entries))
-             (let ((content (string-trim (buffer-substring-no-properties
-                                           (point) prev-pt))))
-               (when (> (length content) 0)
-                 (push (list :role "user" :content content) prompts))))
-            ('ignore))
-          (setq prev-pt (point)))
-      ;; Fallback: just use the whole buffer as one user prompt
-      (let ((content (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
-        (when (> (length content) 0)
-          (push (list :role "user" :content content) prompts))))
-
-(cl-defmethod gptel--request-data ((_backend fuji-gptel-backend) prompts)
-  "Prepare the data for a Nexus request.
-Since we intercept in the WAIT state, we just pass the prompts through."
-  prompts)
+;; DISABLED: (cl-defmethod gptel--parse-buffer ((_backend fuji-gptel-backend) &optional max-entries)
+;; DISABLED:   "Parse current buffer backwards from point and return a list of prompts.
+;; DISABLED: For Nexus, we follow the standard gptel pattern of scanning for 'gptel properties."
+;; DISABLED:   (let ((prompts) (prev-pt (point)))
+;; DISABLED:     (if (or gptel-mode gptel-track-response)
+;; DISABLED:         (while (and (or (not max-entries) (>= max-entries 0))
+;; DISABLED:                     (/= prev-pt (point-min))
+;; DISABLED:                     (goto-char (max (point-min) 
+;; DISABLED:                                     (previous-single-property-change
+;; DISABLED:                                      (point) 'gptel nil (point-min)))))
+;; DISABLED:           (pcase (get-char-property (point) 'gptel)
+;; DISABLED:             ('response
+;; DISABLED:              (let ((content (string-trim (buffer-substring-no-properties (point) prev-pt))))
+;; DISABLED:                (when (> (length content) 0)
+;; DISABLED:                  (push (list :role "assistant" :content content) prompts))))
+;; DISABLED:             ('nil
+;; DISABLED:              (and max-entries (cl-decf max-entries))
+;; DISABLED:              (let ((content (string-trim (buffer-substring-no-properties
+;; DISABLED:                                            (point) prev-pt))))
+;; DISABLED:                (when (> (length content) 0)
+;; DISABLED:                  (push (list :role "user" :content content) prompts))))
+;; DISABLED:             ('ignore))
+;; DISABLED:           (setq prev-pt (point)))
+;; DISABLED:       ;; Fallback: just use the whole buffer as one user prompt
+;; DISABLED:       (let ((content (string-trim (buffer-substring-no-properties (point-min) (point-max)))))
+;; DISABLED:         (when (> (length content) 0)
+;; DISABLED:           (push (list :role "user" :content content) prompts))))
+;; DISABLED: 
+;; DISABLED: (cl-defmethod gptel--request-data ((_backend fuji-gptel-backend) prompts)
+;; DISABLED:   "Prepare the data for a Nexus request.
+;; DISABLED: Since we intercept in the WAIT state, we just pass the prompts through."
+;; DISABLED:   prompts)
 
 (defun fuji--gptel-request-handler (backend prompt &rest args)
   "Async request handler for Graphlit RAG backend.
@@ -1392,7 +1392,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
               (insert details)
               (goto-char (point-min))
               (view-mode))
-            (display-buffer (current-buffer))))))
+            (display-buffer (current-buffer))))
        (message "No details available"))))
 
 ;;;###autoload
