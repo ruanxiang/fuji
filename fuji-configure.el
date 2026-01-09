@@ -225,7 +225,7 @@ Returns an alist of configured items."
                                 "")))
          (vis-backend (gptel-get-backend vis-backend-name))
          (vis-model (completing-read "Vision Model: " 
-                                     (gptel-backend-models vis-backend) nil nil))))
+                                     (gptel-backend-models vis-backend) nil nil)))
     
     (customize-save-variable 'fuji-gptel-backend chat-backend-name)
     (customize-save-variable 'fuji-gptel-model chat-model)
