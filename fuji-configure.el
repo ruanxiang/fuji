@@ -217,7 +217,7 @@ Returns an alist of configured items."
          (chat-model (completing-read "Default Chat Model: " 
                                       (gptel-backend-models chat-backend) nil nil))
          (vis-backend-name (completing-read 
-                            "Vision Backend (Multimodal): " backends nil nil)))
+                            "Vision Backend (Multimodal): " backends nil nil))
          (vis-backend (gptel-get-backend vis-backend-name))
          (vis-model (completing-read "Vision Model: " 
                                      (gptel-backend-models vis-backend) nil nil)))
