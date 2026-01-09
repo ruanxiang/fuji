@@ -78,7 +78,7 @@ Returns a plist with selections."
                        "RAG/MCP Backend (more backends will be supported): "
                        '("graphlit")
                        nil t))
-         (rag-backend-value "graphlit"))  ;; Only graphlit for now)
+         (rag-backend-value "graphlit"))  ;; Only graphlit for now
     
     ;; Save: no extraction type, just LLM tool choice
     (customize-save-variable 'fuji-llm-extraction-tool llm-tool-value)
