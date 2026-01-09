@@ -67,28 +67,29 @@ Returns a plist with selections."
   (let* (;; Ask which LLM tool to configure
          (llm-tool (progn
                      (message "Which LLM extraction tool to configure:")
-                     (message "  - marker: Current default (high-quality, with figures)")
-                     (message "  - nougat: Future option")
+                     (message "  - marker: High-quality extraction with figures")
+                     (message "  (More LLM tools will be added in the future)")
                      (message "")
                      (completing-read
                       "LLM extraction tool: "
-                      '("marker (current default)"
-                        "nougat (future)")
+                      '("marker")
                       nil t)))
-         (llm-tool-value (if (string-prefix-p "marker" llm-tool)
-                             "marker"
-                           "nougat"))
+         (llm-tool-value "marker")  ;; Only marker for now
          (docx-extractor (completing-read
                           "DOCX/EPUB/HTML Extractor: "
                           '("pandoc")
                           nil t (or (bound-and-true-p fuji-docx-extractor) "pandoc")))
-         (rag-backend (completing-read
-                       "RAG/MCP Backend: "
-                       '("graphlit (cloud-based, MCP)" "local-vector (future)")
-                       nil t))
-         (rag-backend-value (if (string-prefix-p "graphlit" rag-backend)
-                                "graphlit"
-                              "local-vector")))
+         (rag-backend (progn
+                        (message "")
+                        (message "RAG/MCP Backend:")
+                        (message "  - graphlit: Cloud-based RAG via MCP")
+                        (message "  (More backends will be supported in the future)")
+                        (message "")
+                        (completing-read
+                         "RAG/MCP Backend: "
+                         '("graphlit")
+                         nil t)))
+         (rag-backend-value "graphlit"))  ;; Only graphlit for now)
     
     ;; Save: no extraction type, just LLM tool choice
     (customize-save-variable 'fuji-llm-extraction-tool llm-tool-value)
