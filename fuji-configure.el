@@ -47,29 +47,27 @@
 ;;; Tier 1: Tool Selection
 
 (defun fuji-configure-tier1 ()
-  "Configure tool selection (Tier 1).
+  "Configure default tool selection (Tier 1).
 Returns a plist with selections."
   (interactive)
-  (message "=== Fuji Configuration: Tier 1 - Tool Selection ===")
+  (message "=== Fuji Configuration: Tier 1 - Default Tool Selection ===")
   (message "")
-  (message "PDF Extraction Options:")
-  (message "  - pdftotext: Fast, lightweight text extraction (no figures)")
-  (message "  - marker: High-quality LLM-based extraction with figures (requires AI models)")
-  (message "  - offline: Use pre-extracted Markdown files")
+  (message "PDF Extraction Default:")
+  (message "  - pdftotext: Fast, lightweight (no figures)")
+  (message "  - marker: LLM-based, high-quality (with figures, requires AI models)")
+  (message "Note: You can override this default when reading files.")
   (message "")
   
   (let* ((pdf-extractor (completing-read 
-                         "Select PDF Extractor: "
+                         "Default PDF Extractor: "
                          '("pdftotext (fast, text-only)"
-                           "marker (LLM-based, high-quality)" 
-                           "offline (pre-extracted)")
+                           "marker (LLM-based, high-quality)")
                          nil t))
          ;; Extract the actual value from the descriptive choice
          (pdf-extractor-value (cond
                                ((string-prefix-p "pdftotext" pdf-extractor) "pdftotext")
                                ((string-prefix-p "marker" pdf-extractor) "marker")
-                               ((string-prefix-p "offline" pdf-extractor) "offline")
-                               (t (or (bound-and-true-p fuji-pdf-extractor) "pdftotext"))))
+                               (t (or (bound-and-true-p fuji-pdf-extractor-default) "pdftotext"))))
          (docx-extractor (completing-read
                           "DOCX/EPUB/HTML Extractor: "
                           '("pandoc")
@@ -84,12 +82,12 @@ Returns a plist with selections."
                              ((string-prefix-p "local-vector" rag-backend) "local-vector")
                              (t (or (bound-and-true-p fuji-rag-backend-name) "graphlit")))))
     
-    (customize-save-variable 'fuji-pdf-extractor pdf-extractor-value)
+    (customize-save-variable 'fuji-pdf-extractor-default pdf-extractor-value)
     (customize-save-variable 'fuji-docx-extractor docx-extractor)
     (customize-save-variable 'fuji-rag-backend-name rag-backend-value)
     
-    (message "Fuji: Tool selection saved.")
-    (message "  PDF Extractor: %s" pdf-extractor-value)
+    (message "Fuji: Default tools saved.")
+    (message "  PDF Extractor Default: %s" pdf-extractor-value)
     (message "  DOCX Extractor: %s" docx-extractor)
     (message "  RAG Backend: %s" rag-backend-value)
     (list :pdf-extractor pdf-extractor-value
@@ -118,8 +116,8 @@ Returns an alist of configured items."
         (customize-save-variable 'fuji-pdftotext-executable (expand-file-name pdftotext-path))
         (push (cons "pdftotext" pdftotext-path) config-items)))
     
-    ;; Marker (if selected) - LLM-based extraction
-    (when (string= (or (bound-and-true-p fuji-pdf-extractor) "") "marker")
+    ;; Marker (if selected as default) - LLM-based extraction
+    (when (string= (or (bound-and-true-p fuji-pdf-extractor-default) "") "marker")
       (message "")
       (message "=== Configuring Marker (LLM-based PDF Extraction) ===")
       (message "Note: Marker uses AI models for high-quality extraction with figure support.")
@@ -138,14 +136,7 @@ Returns an alist of configured items."
           (customize-save-variable 'fuji-marker-executable (expand-file-name marker-path))
           (push (cons "marker" marker-path) config-items))))
     
-    ;; Offline extraction directory (if selected)
-    (when (string= (or (bound-and-true-p fuji-pdf-extractor) "") "offline")
-      (let ((offline-dir (read-directory-name
-                          "Directory with pre-extracted Markdown files: "
-                          (bound-and-true-p fuji-offline-extraction-dir) nil t)))
-        (when offline-dir
-          (customize-save-variable 'fuji-offline-extraction-dir (expand-file-name offline-dir))
-          (push (cons "offline-dir" offline-dir) config-items))))
+    
     
     ;; Pandoc (required for DOCX)
     (let* ((detected (fuji--auto-detect-pandoc))
@@ -275,19 +266,14 @@ Guides through Tier 1 (tool selection) and Tier 2 (tool-specific config)."
           (message "✓ pdftotext: %s" pdftotext)
         (push "pdftotext not found or not executable (required)" errors)))
     
-    ;; Check Marker if selected
-    (when (string= (or (bound-and-true-p fuji-pdf-extractor) "") "marker")
+    ;; Check Marker if selected as default
+    (when (string= (or (bound-and-true-p fuji-pdf-extractor-default) "") "marker")
       (let ((marker (fuji--auto-detect-marker)))
         (if (and marker (file-executable-p marker))
             (message "✓ Marker: %s" marker)
           (push "Marker selected but not found or not executable" errors))))
     
-    ;; Check offline directory if selected
-    (when (string= (or (bound-and-true-p fuji-pdf-extractor) "") "offline")
-      (if (and (bound-and-true-p fuji-offline-extraction-dir)
-               (file-directory-p fuji-offline-extraction-dir))
-          (message "✓ Offline extraction directory: %s" fuji-offline-extraction-dir)
-        (push "Offline extraction selected but directory not configured or not found" errors)))
+    
     
     ;; Check pandoc
     (let ((pandoc (fuji--auto-detect-pandoc)))

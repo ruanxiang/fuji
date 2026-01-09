@@ -135,15 +135,14 @@ If nil, use the default model for the vision backend."
 
 ;;; Phase 1: Two-Tier Configuration Variables
 
-;; Tier 1: Tool Selection
-(defcustom fuji-pdf-extractor "pdftotext"
-  "PDF extraction tool to use.
-- pdftotext: Lightweight, always available (required)
-- marker: High-quality LLM-based extraction (optional)
-- offline: Use pre-extracted Markdown files"
+;; Tier 1: Tool Selection (Default Tools)
+(defcustom fuji-pdf-extractor-default "pdftotext"
+  "Default PDF extraction tool to use.
+This is the default choice, but can be overridden at runtime when reading files.
+- pdftotext: Lightweight, fast (no figures)
+- marker: High-quality LLM-based extraction (with figures)"
   :type '(choice (const :tag "pdftotext (Default)" "pdftotext")
-                 (const :tag "Marker (High Quality)" "marker")
-                 (const :tag "Offline Pre-extracted" "offline"))
+                 (const :tag "Marker (LLM-based)" "marker"))
   :group 'fuji)
 
 (defcustom fuji-docx-extractor "pandoc"
@@ -168,11 +167,7 @@ If nil, use the default model for the vision backend."
   :type '(choice (const :tag "Auto-detect" nil) file)
   :group 'fuji)
 
-(defcustom fuji-offline-extraction-dir nil
-  "Directory containing pre-extracted Markdown files.
-Only used when fuji-pdf-extractor is set to 'offline'."
-  :type '(choice (const :tag "Not configured" nil) directory)
-  :group 'fuji)
+
 
 (defcustom fuji-originals-archive-dir nil
   "Directory to archive original files. 

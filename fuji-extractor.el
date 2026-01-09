@@ -98,14 +98,14 @@ Returns a list of extractor names sorted by priority (highest first)."
 Priority order:
 1. PREFERRED argument (if provided and available)
 2. Buffer-local session override (fuji--session-extractor)
-3. Global configuration (fuji-pdf-extractor from Phase 1)
+3. Global configuration default (fuji-pdf-extractor-default from Phase 1)
 4. Legacy global preference (fuji-preferred-extractor)
 5. Auto-select highest priority available extractor
 Returns the extractor name (string) or nil if none available."
   (let ((available (fuji--available-extractors))
         (choice (or preferred
                     (and (boundp 'fuji--session-extractor) fuji--session-extractor)
-                    (and (boundp 'fuji-pdf-extractor) fuji-pdf-extractor)
+                    (and (boundp 'fuji-pdf-extractor-default) fuji-pdf-extractor-default)
                     fuji-preferred-extractor)))
     (cond
      ;; Use specified choice if available
