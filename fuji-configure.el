@@ -212,17 +212,12 @@ Returns an alist of configured items."
   (require 'gptel)
   (let* ((backends (mapcar (lambda (b) (gptel-backend-name (cdr b))) gptel--known-backends))
          (chat-backend-name (completing-read 
-                             "Default Chat Backend: " backends nil t 
-                             (or (bound-and-true-p fuji-gptel-backend) "")))
+                             "Default Chat Backend: " backends nil nil))
          (chat-backend (gptel-get-backend chat-backend-name))
          (chat-model (completing-read "Default Chat Model: " 
                                       (gptel-backend-models chat-backend) nil nil))
          (vis-backend-name (completing-read 
-                            "Vision Backend (Multimodal): " backends nil t
-                            (or (and (bound-and-true-p fuji-gptel-vision-backend)
-                                     (symbolp fuji-gptel-vision-backend)
-                                     (symbol-name fuji-gptel-vision-backend))
-                                "")))
+                            "Vision Backend (Multimodal): " backends nil nil)))
          (vis-backend (gptel-get-backend vis-backend-name))
          (vis-model (completing-read "Vision Model: " 
                                      (gptel-backend-models vis-backend) nil nil)))
