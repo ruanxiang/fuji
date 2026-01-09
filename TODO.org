@@ -72,17 +72,35 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
         - [ ] Offline pre-extracted results (user provides pre-processed Markdown)
       - [ ] DOCX/EPUB/HTML Extractor: Pandoc (required)
       - [ ] RAG Backend: Radio buttons (Graphlit [current], Local Vector DB [future])
-    - [ ] **Tier 2: Tool-Specific Configuration** (dynamic based on Tier 1 selection)
-      - [ ] pdftotext: Binary path (auto-detect, required)
-      - [ ] Marker (if enabled): Binary path (auto-detect + override)
-      - [ ] Offline extraction: Directory path for pre-extracted results
-      - [ ] Pandoc: Binary path (auto-detect)
-      - [ ] Graphlit: Org ID, Env ID, JWT Secret
-  - [ ] **Smart Defaults & Auto-Detection**:
-    - [ ] Cache Path: Default to `~/.cache/fuji/` (user can override).
-    - [ ] Originals Archive: Default to `originals/` (relative to Cache Path, user can rename).
-    - [ ] pdftotext Binary: Auto-detect (required).
-    - [ ] Marker Binary: Auto-detect from `$PATH` (optional).
+    - [ ] ** DONE 1. Two-Tier Configuration & Environment
+   CLOSED: [2026-01-09 Thu 15:17]
+
+*** DONE Tier 1: Tool Selection UI
+    CLOSED: [2026-01-09 Thu 15:17]
+- [X] PDF Extractor selection (pdftotext/LLM-based)
+- [X] LLM tool selection (marker/nougat/etc)
+- [X] DOCX/EPUB/HTML Extractor (Pandoc)
+- [X] RAG Backend selection (Graphlit/future alternatives)
+
+*** DONE Tier 2: Tool-Specific Configuration
+    CLOSED: [2026-01-09 Thu 15:17]
+- [X] pdftotext binary path (auto-detect)
+- [X] LLM tool binary path (marker/nougat)
+- [X] Pandoc binary path (auto-detect)
+- [X] Graphlit credentials (Org ID, Env ID, JWT Secret)
+- [X] Cache and originals directories
+
+*** DONE Smart Defaults & Auto-Detection
+    CLOSED: [2026-01-09 Thu 15:17]
+- [X] Auto-detect binary paths using executable-find
+- [X] Sensible defaults for all configuration options
+- [X] Configuration persistence via customize-save-variable
+
+*** DONE Plugin Dispatcher Integration
+    CLOSED: [2026-01-09 Thu 15:17]
+- [X] Update fuji-extractor.el to use new configuration
+- [X] Update fuji-rag.el to use new configuration
+- [X] Ensure backward compatibility with legacy preferencesom `$PATH` (optional).
     - [ ] Pandoc Binary: Auto-detect using `executable-find`.
   - [ ] Define persistent variables (saved to custom file or `.emacs.d/`):
     - [ ] Plugin selections (which extractor/RAG backend for each file type)
