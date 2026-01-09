@@ -135,14 +135,23 @@ If nil, use the default model for the vision backend."
 
 ;;; Phase 1: Two-Tier Configuration Variables
 
-;; Tier 1: Tool Selection (Default Tools)
-(defcustom fuji-pdf-extractor-default "pdftotext"
-  "Default PDF extraction tool to use.
+;; Tier 1: Extraction Type Selection
+(defcustom fuji-pdf-extraction-type "pdftotext"
+  "Default PDF extraction type to use.
 This is the default choice, but can be overridden at runtime when reading files.
 - pdftotext: Lightweight, fast (no figures)
-- marker: High-quality LLM-based extraction (with figures)"
+- llm-based: High-quality LLM-based extraction (with figures, requires AI models)"
   :type '(choice (const :tag "pdftotext (Default)" "pdftotext")
-                 (const :tag "Marker (LLM-based)" "marker"))
+                 (const :tag "LLM-based (High Quality)" "llm-based"))
+  :group 'fuji)
+
+(defcustom fuji-llm-extraction-tool "marker"
+  "Which LLM-based extraction tool to use (when fuji-pdf-extraction-type is 'llm-based').
+- marker: Current default LLM tool
+- nougat: Future option
+- ... other LLM tools"
+  :type '(choice (const :tag "Marker" "marker")
+                 (const :tag "Nougat (Future)" "nougat"))
   :group 'fuji)
 
 (defcustom fuji-docx-extractor "pandoc"
