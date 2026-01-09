@@ -65,30 +65,19 @@ Returns a plist with selections."
   (message "")
   
   (let* (;; Ask which LLM tool to configure
-         (llm-tool (progn
-                     (message "Which LLM extraction tool to configure:")
-                     (message "  - marker: High-quality extraction with figures")
-                     (message "  (More LLM tools will be added in the future)")
-                     (message "")
-                     (completing-read
-                      "LLM extraction tool: "
-                      '("marker")
-                      nil t)))
+         (llm-tool (completing-read
+                    "LLM extraction tool (more tools will be added): "
+                    '("marker")
+                    nil t))
          (llm-tool-value "marker")  ;; Only marker for now
          (docx-extractor (completing-read
                           "DOCX/EPUB/HTML Extractor: "
                           '("pandoc")
                           nil t (or (bound-and-true-p fuji-docx-extractor) "pandoc")))
-         (rag-backend (progn
-                        (message "")
-                        (message "RAG/MCP Backend:")
-                        (message "  - graphlit: Cloud-based RAG via MCP")
-                        (message "  (More backends will be supported in the future)")
-                        (message "")
-                        (completing-read
-                         "RAG/MCP Backend: "
-                         '("graphlit")
-                         nil t)))
+         (rag-backend (completing-read
+                       "RAG/MCP Backend (more backends will be supported): "
+                       '("graphlit")
+                       nil t))
          (rag-backend-value "graphlit"))  ;; Only graphlit for now)
     
     ;; Save: no extraction type, just LLM tool choice
@@ -226,10 +215,8 @@ Returns an alist of configured items."
                              "Default Chat Backend: " backends nil t 
                              (or (bound-and-true-p fuji-gptel-backend) "")))
          (chat-backend (gptel-get-backend chat-backend-name))
-         (chat-model (completing-read 
-                      "Default Chat Model: " 
-                      (gptel-backend-models chat-backend) nil t 
-                      (or (bound-and-true-p fuji-gptel-model) "")))
+         (chat-model (completing-read "Default Chat Model: " 
+                                      (gptel-backend-models chat-backend) nil nil))
          (vis-backend-name (completing-read 
                             "Vision Backend (Multimodal): " backends nil t
                             (or (and (bound-and-true-p fuji-gptel-vision-backend)
@@ -237,10 +224,8 @@ Returns an alist of configured items."
                                      (symbol-name fuji-gptel-vision-backend))
                                 "")))
          (vis-backend (gptel-get-backend vis-backend-name))
-         (vis-model (completing-read 
-                     "Vision Model: " 
-                     (gptel-backend-models vis-backend) nil t
-                     (or (bound-and-true-p fuji-gptel-vision-model) ""))))
+         (vis-model (completing-read "Vision Model: " 
+                                     (gptel-backend-models vis-backend) nil nil))))
     
     (customize-save-variable 'fuji-gptel-backend chat-backend-name)
     (customize-save-variable 'fuji-gptel-model chat-model)
