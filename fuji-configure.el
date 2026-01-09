@@ -47,46 +47,37 @@
 ;;; Tier 1: Tool Selection
 
 (defun fuji-configure-tier1 ()
-  "Configure default tool selection (Tier 1).
+  "Configure tool selection (Tier 1).
+Note: Both pdftotext and LLM tool will be configured.
 Returns a plist with selections."
   (interactive)
-  (message "=== Fuji Configuration: Tier 1 - Default Tool Selection ===")
+  (message "=== Fuji Configuration: Tier 1 - Tool Selection ===")
   (message "")
-  (message "PDF Extraction Type:")
-  (message "  - pdftotext: Fast, lightweight (no figures)")
-  (message "  - llm-based: High-quality with figures (requires AI models)")
-  (message "Note: You can override this default when reading files.")
+  (message "PDF Extraction Tools:")
+  (message "  - pdftotext: Always configured (fast, lightweight, default)")
+  (message "  - LLM tool: Also configured (high-quality, with figures)")
+  (message "")
+  (message "At runtime (fuji-read), you can choose which tool to use.")
   (message "")
   (message "RAG/MCP Backend (for knowledge retrieval):")
   (message "  - graphlit: Cloud-based RAG via MCP (requires credentials)")
   (message "  - local-vector: Future local vector database option")
   (message "")
   
-  (let* ((pdf-type (completing-read 
-                    "Default PDF Extraction Type: "
-                    '("pdftotext (fast, lightweight)"
-                      "llm-based (high-quality, with figures)")
-                    nil t))
-         (pdf-type-value (if (string-prefix-p "pdftotext" pdf-type) 
-                             "pdftotext" 
-                             "llm-based"))
-         ;; If LLM-based, ask which specific tool
-         (llm-tool (when (string= pdf-type-value "llm-based")
-                     (progn
-                       (message "")
-                       (message "LLM Extraction Tools:")
-                       (message "  - marker: Current default (high-quality, with figures)")
-                       (message "  - nougat: Future option")
-                       (message "")
-                       (completing-read
-                        "Which LLM extraction tool: "
-                        '("marker (current default)"
-                          "nougat (future)")
-                        nil t))))
-         (llm-tool-value (when llm-tool
-                          (if (string-prefix-p "marker" llm-tool)
-                              "marker"
-                            "nougat")))
+  (let* (;; Ask which LLM tool to configure
+         (llm-tool (progn
+                     (message "Which LLM extraction tool to configure:")
+                     (message "  - marker: Current default (high-quality, with figures)")
+                     (message "  - nougat: Future option")
+                     (message "")
+                     (completing-read
+                      "LLM extraction tool: "
+                      '("marker (current default)"
+                        "nougat (future)")
+                      nil t)))
+         (llm-tool-value (if (string-prefix-p "marker" llm-tool)
+                             "marker"
+                           "nougat"))
          (docx-extractor (completing-read
                           "DOCX/EPUB/HTML Extractor: "
                           '("pandoc")
@@ -99,20 +90,17 @@ Returns a plist with selections."
                                 "graphlit"
                               "local-vector")))
     
-    (customize-save-variable 'fuji-pdf-extraction-type pdf-type-value)
-    (when llm-tool-value
-      (customize-save-variable 'fuji-llm-extraction-tool llm-tool-value))
+    ;; Save: no extraction type, just LLM tool choice
+    (customize-save-variable 'fuji-llm-extraction-tool llm-tool-value)
     (customize-save-variable 'fuji-docx-extractor docx-extractor)
     (customize-save-variable 'fuji-rag-backend-name rag-backend-value)
     
-    (message "Fuji: Default tools saved.")
-    (message "  PDF Extraction Type: %s" pdf-type-value)
-    (when llm-tool-value
-      (message "  LLM Tool: %s" llm-tool-value))
+    (message "Fuji: Tool selection saved.")
+    (message "  pdftotext: Will be configured (always)")
+    (message "  LLM Tool: %s" llm-tool-value)
     (message "  DOCX Extractor: %s" docx-extractor)
     (message "  RAG/MCP Backend: %s" rag-backend-value)
-    (list :pdf-type pdf-type-value
-          :llm-tool llm-tool-value
+    (list :llm-tool llm-tool-value
           :docx-extractor docx-extractor
           :rag-backend rag-backend-value)))
 
@@ -139,40 +127,39 @@ Returns an alist of configured items."
         (push (cons "pdftotext" pdftotext-path) config-items)))
     
     
-    ;; LLM-based extraction tool (if selected)
-    (when (string= (or (bound-and-true-p fuji-pdf-extraction-type) "") "llm-based")
-      (let ((llm-tool (or (bound-and-true-p fuji-llm-extraction-tool) "marker")))
-        (cond
-         ;; Configure Marker
-         ((string= llm-tool "marker")
-          (message "")
-          (message "=== Configuring Marker (LLM-based PDF Extraction) ===")
-          (message "Note: Marker uses AI models for high-quality extraction with figure support.")
-          (message "First run will download several GB of AI models.")
-          (message "")
-          (let* ((detected (fuji--auto-detect-marker))
-                 (marker-path (if detected
-                                  (read-file-name
-                                   (format "Path to Marker [%s]: " detected)
-                                   (file-name-directory detected)
-                                   detected t nil
-                                   (lambda (f) (or (file-directory-p f)
-                                                 (string-match-p "marker" f))))
-                                (read-file-name "Path to Marker: " nil nil t))))
-            (when marker-path
-              (customize-save-variable 'fuji-marker-executable (expand-file-name marker-path))
-              (push (cons "marker" marker-path) config-items))))
-         
-         ;; Configure Nougat (future)
-         ((string= llm-tool "nougat")
-          (message "")
-          (message "=== Configuring Nougat (LLM-based PDF Extraction) ===")
-          (message "Note: Nougat support is coming soon.")
-          (message ""))
-         
-         ;; Other LLM tools (future)
-         (t
-          (message "Warning: Unknown LLM tool: %s" llm-tool)))))
+    ;; LLM extraction tool (ALWAYS configured)
+    (let ((llm-tool (or (bound-and-true-p fuji-llm-extraction-tool) "marker")))
+      (cond
+       ;; Configure Marker
+       ((string= llm-tool "marker")
+        (message "")
+        (message "=== Configuring Marker (LLM-based PDF Extraction) ===")
+        (message "Note: Marker uses AI models for high-quality extraction with figure support.")
+        (message "First run will download several GB of AI models.")
+        (message "")
+        (let* ((detected (fuji--auto-detect-marker))
+               (marker-path (if detected
+                                (read-file-name
+                                 (format "Path to Marker [%s]: " detected)
+                                 (file-name-directory detected)
+                                 detected t nil
+                                 (lambda (f) (or (file-directory-p f)
+                                               (string-match-p "marker" f))))
+                              (read-file-name "Path to Marker: " nil nil t))))
+          (when marker-path
+            (customize-save-variable 'fuji-marker-executable (expand-file-name marker-path))
+            (push (cons "marker" marker-path) config-items))))
+       
+       ;; Configure Nougat (future)
+       ((string= llm-tool "nougat")
+        (message "")
+        (message "=== Configuring Nougat (LLM-based PDF Extraction) ===")
+        (message "Note: Nougat support is coming soon.")
+        (message ""))
+       
+       ;; Other LLM tools (future)
+       (t
+        (message "Warning: Unknown LLM tool: %s" llm-tool))))
     
     
     
@@ -305,19 +292,18 @@ Guides through Tier 1 (tool selection) and Tier 2 (tool-specific config)."
         (push "pdftotext not found or not executable (required)" errors)))
     
     
-    ;; Check LLM-based extraction if selected
-    (when (string= (or (bound-and-true-p fuji-pdf-extraction-type) "") "llm-based")
-      (let ((llm-tool (or (bound-and-true-p fuji-llm-extraction-tool) "marker")))
-        (cond
-         ((string= llm-tool "marker")
-          (let ((marker (fuji--auto-detect-marker)))
-            (if (and marker (file-executable-p marker))
-                (message "✓ Marker (LLM tool): %s" marker)
-              (push "LLM-based extraction selected with Marker, but Marker not found or not executable" errors))))
-         ((string= llm-tool "nougat")
-          (push "Nougat selected but not yet supported" warnings))
-         (t
-          (push (format "Unknown LLM tool selected: %s" llm-tool) errors)))))
+    ;; Check LLM extraction tool (ALWAYS configured)
+    (let ((llm-tool (or (bound-and-true-p fuji-llm-extraction-tool) "marker")))
+      (cond
+       ((string= llm-tool "marker")
+        (let ((marker (fuji--auto-detect-marker)))
+          (if (and marker (file-executable-p marker))
+              (message "✓ Marker (LLM tool): %s" marker)
+            (push "Marker (LLM tool) not found or not executable" errors))))
+       ((string= llm-tool "nougat")
+        (push "Nougat selected but not yet supported" warnings))
+       (t
+        (push (format "Unknown LLM tool selected: %s" llm-tool) errors))))
     
     
     

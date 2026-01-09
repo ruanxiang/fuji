@@ -98,17 +98,13 @@ Returns a list of extractor names sorted by priority (highest first)."
 Priority order:
 1. PREFERRED argument (if provided and available)
 2. Buffer-local session override (fuji--session-extractor)
-3. Global configuration (extraction type + LLM tool from Phase 1)
+3. Default to pdftotext (fast, always available)
 4. Legacy global preference (fuji-preferred-extractor)
 5. Auto-select highest priority available extractor
 Returns the extractor name (string) or nil if none available."
   (let* ((available (fuji--available-extractors))
-         ;; Determine default based on extraction type + LLM tool
-         (extraction-type (or (bound-and-true-p fuji-pdf-extraction-type) "pdftotext"))
-         (llm-tool (or (bound-and-true-p fuji-llm-extraction-tool) "marker"))
-         (config-default (if (string= extraction-type "llm-based")
-                             llm-tool
-                           "pdftotext"))
+         ;; Default is always pdftotext (not based on type)
+         (config-default "pdftotext")
          (choice (or preferred
                      (and (boundp 'fuji--session-extractor) fuji--session-extractor)
                      config-default
