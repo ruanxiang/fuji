@@ -44,6 +44,7 @@
 (require 'fuji-extractor-pandoc)
 (require 'fuji-rag)
 (require 'fuji-rag-graphlit)
+(require 'fuji-configure)
 
 (defgroup fuji nil
   "Customization group for Fuji."
@@ -132,6 +133,54 @@ If nil, use the default model for the vision backend."
                  string)
   :group 'fuji)
 
+;;; Phase 1: Two-Tier Configuration Variables
+
+;; Tier 1: Tool Selection
+(defcustom fuji-pdf-extractor "pdftotext"
+  "PDF extraction tool to use.
+- pdftotext: Lightweight, always available (required)
+- marker: High-quality LLM-based extraction (optional)
+- offline: Use pre-extracted Markdown files"
+  :type '(choice (const :tag "pdftotext (Default)" "pdftotext")
+                 (const :tag "Marker (High Quality)" "marker")
+                 (const :tag "Offline Pre-extracted" "offline"))
+  :group 'fuji)
+
+(defcustom fuji-docx-extractor "pandoc"
+  "DOCX/EPUB/HTML extraction tool to use."
+  :type '(choice (const :tag "Pandoc (Required)" "pandoc"))
+  :group 'fuji)
+
+(defcustom fuji-rag-backend-name "graphlit"
+  "RAG backend to use for knowledge retrieval."
+  :type '(choice (const :tag "Graphlit (Current)" "graphlit")
+                 (const :tag "Local Vector DB (Future)" "local-vector"))
+  :group 'fuji)
+
+;; Tier 2: Tool-Specific Configuration
+(defcustom fuji-pdftotext-executable nil
+  "Path to pdftotext binary. Auto-detected if nil."
+  :type '(choice (const :tag "Auto-detect" nil) file)
+  :group 'fuji)
+
+(defcustom fuji-pandoc-executable nil
+  "Path to pandoc binary. Auto-detected if nil."
+  :type '(choice (const :tag "Auto-detect" nil) file)
+  :group 'fuji)
+
+(defcustom fuji-offline-extraction-dir nil
+  "Directory containing pre-extracted Markdown files.
+Only used when fuji-pdf-extractor is set to 'offline'."
+  :type '(choice (const :tag "Not configured" nil) directory)
+  :group 'fuji)
+
+(defcustom fuji-originals-archive-dir nil
+  "Directory to archive original files. 
+Defaults to 'originals/' relative to cache directory if nil."
+  :type '(choice (const :tag "Default (cache/originals/)" nil) directory)
+  :group 'fuji)
+
+
 (defconst fuji-progress-buffer "*Nexus Progress*")
 
 (defvar-local fuji--content-id nil "Graphlit content ID for current session.")
@@ -187,64 +236,7 @@ If nil, use the default model for the vision backend."
     (auth-source-forget-all-cached)
     (message "Fuji: Credentials saved to ~/.authinfo and cache cleared.")))
 
-(defun fuji-configure ()
-  "Interactively configure or modify Fuji settings."
-  (interactive)
-  (let* ((auth (condition-case nil (fuji--get-auth "graphlit") (error nil)))
-         (backends (mapcar (lambda (b) (gptel-backend-name (cdr b))) gptel--known-backends))
-         (marker-path (read-file-name "Path to Marker (marker_single preferred): " 
-                                       (file-name-directory (or fuji-marker-executable ""))
-                                       fuji-marker-executable t))
-         (bib-path (read-directory-name "Directory for BibTeX files: " 
-                                        fuji-bib-path fuji-bib-path t))
-         
-         ;; Chat Model Config
-         (chat-backend-name (completing-read "Default Chat Backend: " backends nil t (or fuji-gptel-backend "")))
-         (chat-backend (gptel-get-backend chat-backend-name))
-         (chat-model (completing-read "Default Chat Model: " (gptel-backend-models chat-backend) nil t (or fuji-gptel-model "")))
-         
-         ;; Vision Model Config
-         (vis-backend-name (completing-read "Vision Backend (Multimodal): " backends nil t 
-                                            (or (and fuji-gptel-vision-backend 
-                                                     (symbolp fuji-gptel-vision-backend)
-                                                     (symbol-name fuji-gptel-vision-backend))
-                                                "")))
-         (vis-backend (gptel-get-backend vis-backend-name))
-         (vis-model (completing-read "Vision Model: " (gptel-backend-models vis-backend) nil t (or fuji-gptel-vision-model "")))
-         
-         (org-id (read-string "Graphlit Organization ID: " (or (plist-get auth :user) "")))
-         (secret (let ((s (read-passwd (format "Graphlit JWT Secret %s: " 
-                                               (if (plist-get auth :secret) "(leave empty to keep current)" "")))))
-                   (if (string-empty-p s) (plist-get auth :secret) s)))
-         (env-id (read-string "Graphlit Environment ID: " (or fuji-graphlit-environment-id "")))
-         (cache-dir (read-directory-name "Cache Directory: " (or fuji-cache-directory "")))
-         (proxy (read-string "HTTP Proxy (e.g. 127.0.0.1:7890, leave empty for none): " 
-                             (or fuji-http-proxy ""))))
-    
-    (customize-save-variable 'fuji-marker-executable (expand-file-name marker-path))
-    (customize-save-variable 'fuji-bib-path (expand-file-name bib-path))
-    (customize-save-variable 'fuji-graphlit-environment-id env-id)
-    (customize-save-variable 'fuji-cache-directory (expand-file-name cache-dir))
-    
-    (customize-save-variable 'fuji-gptel-backend chat-backend-name)
-    (customize-save-variable 'fuji-gptel-model chat-model)
-    
-    (unless (string-empty-p vis-backend-name)
-      (customize-save-variable 'fuji-gptel-vision-backend (intern vis-backend-name)))
-    (unless (string-empty-p vis-model)
-      (customize-save-variable 'fuji-gptel-vision-model vis-model))
-    
-    ;; Save credentials to ~/.authinfo
-    (when (and (not (string-empty-p org-id)) (not (string-empty-p secret)))
-      (fuji--save-auth-entry org-id secret))
 
-    (if (string-empty-p proxy)
-        (customize-save-variable 'fuji-http-proxy nil)
-      (customize-save-variable 'fuji-http-proxy proxy))
-    
-    (fuji-apply-proxy)
-    (fuji--register-mcp-server)
-    (message "Fuji: Configuration updated and MCP server registered.")))
 
 (defun fuji--get-mcp-connection ()
   "Get the current Graphlit MCP connection object, registering it if necessary."

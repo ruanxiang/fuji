@@ -99,10 +99,12 @@ Returns a list of backend names."
   "Get the currently active RAG backend struct.
 Priority order:
 1. Buffer-local session override (fuji--session-rag-backend)
-2. Global setting (fuji-rag-backend)
+2. Global configuration (fuji-rag-backend-name from Phase 1)
+3. Legacy global setting (fuji-rag-backend)
 Returns the backend struct or signals an error if not available."
   (let* ((backend-name (or (and (boundp 'fuji--session-rag-backend) 
                                 fuji--session-rag-backend)
+                           (and (boundp 'fuji-rag-backend-name) fuji-rag-backend-name)
                            fuji-rag-backend))
          (backend (fuji-get-rag-backend backend-name)))
     (unless backend
