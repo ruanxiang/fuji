@@ -50,27 +50,51 @@
   "Configure tool selection (Tier 1).
 Returns a plist with selections."
   (interactive)
+  (message "=== Fuji Configuration: Tier 1 - Tool Selection ===")
+  (message "")
+  (message "PDF Extraction Options:")
+  (message "  - pdftotext: Fast, lightweight text extraction (no figures)")
+  (message "  - marker: High-quality LLM-based extraction with figures (requires AI models)")
+  (message "  - offline: Use pre-extracted Markdown files")
+  (message "")
+  
   (let* ((pdf-extractor (completing-read 
-                         "PDF Extractor: "
-                         '("pdftotext" "marker" "offline")
-                         nil t (or (bound-and-true-p fuji-pdf-extractor) "pdftotext")))
+                         "Select PDF Extractor: "
+                         '("pdftotext (fast, text-only)"
+                           "marker (LLM-based, high-quality)" 
+                           "offline (pre-extracted)")
+                         nil t))
+         ;; Extract the actual value from the descriptive choice
+         (pdf-extractor-value (cond
+                               ((string-prefix-p "pdftotext" pdf-extractor) "pdftotext")
+                               ((string-prefix-p "marker" pdf-extractor) "marker")
+                               ((string-prefix-p "offline" pdf-extractor) "offline")
+                               (t (or (bound-and-true-p fuji-pdf-extractor) "pdftotext"))))
          (docx-extractor (completing-read
                           "DOCX/EPUB/HTML Extractor: "
                           '("pandoc")
                           nil t (or (bound-and-true-p fuji-docx-extractor) "pandoc")))
          (rag-backend (completing-read
                        "RAG Backend: "
-                       '("graphlit" "local-vector")
-                       nil t (or (bound-and-true-p fuji-rag-backend-name) "graphlit"))))
+                       '("graphlit (cloud-based)" "local-vector (future)")
+                       nil t))
+         ;; Extract the actual value from the descriptive choice
+         (rag-backend-value (cond
+                             ((string-prefix-p "graphlit" rag-backend) "graphlit")
+                             ((string-prefix-p "local-vector" rag-backend) "local-vector")
+                             (t (or (bound-and-true-p fuji-rag-backend-name) "graphlit")))))
     
-    (customize-save-variable 'fuji-pdf-extractor pdf-extractor)
+    (customize-save-variable 'fuji-pdf-extractor pdf-extractor-value)
     (customize-save-variable 'fuji-docx-extractor docx-extractor)
-    (customize-save-variable 'fuji-rag-backend-name rag-backend)
+    (customize-save-variable 'fuji-rag-backend-name rag-backend-value)
     
     (message "Fuji: Tool selection saved.")
-    (list :pdf-extractor pdf-extractor
+    (message "  PDF Extractor: %s" pdf-extractor-value)
+    (message "  DOCX Extractor: %s" docx-extractor)
+    (message "  RAG Backend: %s" rag-backend-value)
+    (list :pdf-extractor pdf-extractor-value
           :docx-extractor docx-extractor
-          :rag-backend rag-backend)))
+          :rag-backend rag-backend-value)))
 
 ;;; Tier 2: Tool-Specific Configuration
 
@@ -94,8 +118,13 @@ Returns an alist of configured items."
         (customize-save-variable 'fuji-pdftotext-executable (expand-file-name pdftotext-path))
         (push (cons "pdftotext" pdftotext-path) config-items)))
     
-    ;; Marker (if selected)
+    ;; Marker (if selected) - LLM-based extraction
     (when (string= (or (bound-and-true-p fuji-pdf-extractor) "") "marker")
+      (message "")
+      (message "=== Configuring Marker (LLM-based PDF Extraction) ===")
+      (message "Note: Marker uses AI models for high-quality extraction with figure support.")
+      (message "First run will download several GB of AI models.")
+      (message "")
       (let* ((detected (fuji--auto-detect-marker))
              (marker-path (if detected
                               (read-file-name
