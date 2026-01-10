@@ -63,20 +63,44 @@ This file tracks the development history across multiple Antigravity conversatio
 
 ---
 
-## Next Steps (Phase 2)
+### Session 4: Phase 2 - Digital Library Evolution (Conversation: current)
+**Date**: 2026-01-10  
+**Status**: ✅ Complete, ready for merge
 
-According to `TODO.org`, the next phase focuses on:
+**Achievements**:
+- **Phase 2.1**: Plugin Integration & Configuration Alignment
+  - Refactored `fuji-read` to use dynamic extraction prompts based on `fuji-llm-extraction-tool`
+  - Replaced hardcoded tool names with configuration variables
+  - Uses unified plugin API (`fuji-get-extractor`) instead of direct function calls
+  - Renamed extraction modes: auto→llm, skip→fast, local→offline
 
-1. **Runtime Extraction Method Selection**
-   - Implement user choice in `fuji-read`: pdftotext / LLM-based / offline
-   - Dynamic offline directory specification
+- **Phase 2.2**: Storage & Archiving System (Calibre-style)
+  - Implemented automatic file archiving to `originals/` directory
+  - Enhanced metadata schema with `archived_path` and `doc_type` fields
+  - Implemented `fuji--resolve-file-path()` with fallback strategy
+  - Automatic archiving on document ingestion
 
-2. **Storage & Archiving System** (Calibre-style)
-   - Automatic file archiving to `originals/`
-   - Metadata tracking
+- **Phase 2.3**: Multi-Format Document Support
+  - Renamed `fuji--select-pdf` to `fuji--select-document`
+  - Added support for PDF, DOCX, EPUB, and HTML file types
+  - Updated extraction logic to use Pandoc for non-PDF formats
+  - Adjusted extraction method prompts based on document type
 
-3. **Multi-Format Expansion**
-   - Pandoc integration for DOCX/EPUB/HTML
+**Git History**:
+- 3 commits on `phase2` branch
+- Total changes: +173 insertions, -70 deletions
+- Ready to merge to `main`
+
+---
+
+## Next Steps (Phase 3)
+
+According to `TODO.org`, future phases could include:
+
+1. **Dual Entry Points**: Direct file open vs Library Manager mode
+2. **Enhanced Library Manager UI**: Custom memos, improved visual layout
+3. **Integrated Reading Experience**: Chat session persistence, better UI
+4. **Bibliography Integration**: DOI support, org-ref compatibility
 
 ---
 
@@ -112,7 +136,7 @@ According to `TODO.org`, the next phase focuses on:
 
 When starting a new conversation about Fuji, mention:
 1. Project location: `/home/ruan/Repositories/EmacsPaperreadingWorkflowAtGithub`
-2. Current phase: Phase 1 complete, starting Phase 2
+2. Current phase: Phase 2 complete, ready for Phase 3
 3. Reference this file: `DEVELOPMENT_HISTORY.md`
 
 The AI will be able to read this file and understand the full context.
