@@ -1233,27 +1233,24 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 
 (defun fuji--get-metadata-cache-file ()
   "Get the path to the metadata cache file."
-  (let ((cache-dir (expand-file-name "~/.cache/fuji")))
-    (unless (file-directory-p cache-dir)
-      (make-directory cache-dir t))
-    (expand-file-name "graphlit-metadata.json" cache-dir)))
+  (expand-file-name "metadata-cache.json" fuji-cache-directory))
 
 (defun fuji--load-metadata-cache ()
-  "Load metadata cache from file. Returns an alist of (content-id . metadata)."
+  "Load metadata cache from JSON file. Returns an alist."
   (let ((cache-file (fuji--get-metadata-cache-file)))
     (if (file-exists-p cache-file)
         (condition-case err
             (with-temp-buffer
               (insert-file-contents cache-file)
-              (let ((json-object-type 'alist))
-                (json-read)))
+              (let ((json-object-type 'alist)
+                    (json-key-type 'symbol)))
           (error
            (message "Fuji: Failed to load metadata cache: %s" (error-message-string err))
-           nil))
-      nil)))
+           '()))
+      '()))))
 
 (defun fuji--save-metadata-cache (cache)
-  "Save metadata CACHE to file."
+  "Save CACHE (alist) to JSON file."
   (let ((cache-file (fuji--get-metadata-cache-file)))
     (condition-case err
         (with-temp-file cache-file
@@ -1261,20 +1258,95 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
       (error
        (message "Fuji: Failed to save metadata cache: %s" (error-message-string err))))))
 
+;;; Phase 2.2: File Archiving Functions
+
+(defun fuji--get-originals-dir ()
+  "Get the originals archive directory path.
+  Creates the directory if it doesn't exist."
+  (let ((dir (or fuji-originals-archive-dir
+                 (expand-file-name "originals/" fuji-cache-directory))))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    dir))
+
+(defun fuji--archive-file (file-path)
+  "Archive FILE-PATH to originals directory.
+Returns the path to the archived file, or nil if archiving fails."
+  (when (and file-path (file-exists-p file-path))
+    (condition-case err
+        (let* ((hash (secure-hash 'sha256 file-path))
+               (ext (file-name-extension file-path t))
+               (archive-name (concat hash ext))
+               (archive-path (expand-file-name archive-name (fuji--get-originals-dir))))
+          ;; Only copy if not already archived
+          (unless (file-exists-p archive-path)
+            (copy-file file-path archive-path t)
+            (fuji--log "Archived original file to: %s" archive-path))
+          archive-path)
+      (error
+       (message "Fuji: Failed to archive file %s: %s" file-path (error-message-string err))
+       nil))))
+
+(defun fuji--resolve-file-path (content-id)
+  "Resolve file path for CONTENT-ID with fallback strategy.
+Priority:
+1. Original path (if exists)
+2. Archived path (if exists)
+3. Extracted markdown (read-only fallback)
+Returns (path . type) where type is 'original, 'archived, or 'markdown.
+Signals an error if no file can be found."
+  (let* ((metadata (fuji--get-metadata-for-id content-id))
+         (original-path (cdr (assoc 'original_path metadata)))
+         (archived-path (cdr (assoc 'archived_path metadata)))
+         (results-dir (cdr (assoc 'results_dir metadata))))
+    (cond
+     ;; Original file exists
+     ((and original-path (file-exists-p original-path))
+      (cons original-path 'original))
+     ;; Archived file exists
+     ((and archived-path (file-exists-p archived-path))
+      (fuji--log "Original file not found, using archived copy")
+      (cons archived-path 'archived))
+     ;; Fallback to markdown
+     ((and results-dir (file-directory-p results-dir))
+      (let ((md-file (fuji--find-marker-output results-dir)))
+        (when md-file
+          (fuji--log "Original and archived files not found, opening extracted markdown (read-only)")
+          (cons md-file 'markdown))))
+     ;; Nothing found
+     (t
+      (error "Cannot locate file for content ID: %s" content-id)))))
+
+
 (defun fuji--add-metadata-entry (content-id filename file-path)
-  "Add metadata entry for CONTENT-ID with FILENAME and FILE-PATH."
+  "Add metadata entry for CONTENT-ID with FILENAME and FILE-PATH.
+Automatically archives the original file and tracks document type."
   (let* ((cache (or (fuji--load-metadata-cache) '()))
          (id-key (if (stringp content-id) (intern content-id) content-id))
-         (file-size (and (file-exists-p file-path) (file-attribute-size (file-attributes file-path))))
+         (file-size (and (file-exists-p file-path) 
+                        (file-attribute-size (file-attributes file-path))))
+         ;; Determine document type from extension
+         (doc-type (cond
+                    ((string-match-p "\\.pdf$" file-path) "pdf")
+                    ((string-match-p "\\.docx?$" file-path) "docx")
+                    ((string-match-p "\\.epub$" file-path) "epub")
+                    ((string-match-p "\\.html?$" file-path) "html")
+                    (t "unknown")))
+         ;; Archive the original file
+         (archived-path (fuji--archive-file file-path))
          (metadata `((filename . ,filename)
                     (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
                     (file_size . ,(or file-size 0))
-                    (local_path . ,file-path))))
+                    (original_path . ,file-path)
+                    (archived_path . ,archived-path)  ; NEW: Phase 2.2
+                    (doc_type . ,doc-type))))          ; NEW: Phase 2.2
     ;; Add or update entry
     (setq cache (cons (cons id-key metadata)
                       (assoc-delete-all id-key cache)))
     (fuji--save-metadata-cache cache)
-    (message "Fuji: Saved metadata for %s" filename)))
+    (if archived-path
+        (message "Fuji: Saved metadata for %s (archived to %s)" filename archived-path)
+      (message "Fuji: Saved metadata for %s" filename))))
 
 (defun fuji--get-metadata-for-id (content-id)
   "Get metadata for CONTENT-ID from cache. Returns alist or nil."
@@ -1546,10 +1618,13 @@ Choose processing mode:
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
   (let* ((pdf-file (fuji--select-pdf))
-         (mode-map '(("Auto (Run Marker) - High accuracy, supports figures" . auto)
-                     ("Skip (pdftotext) - Fast, text only, lower accuracy" . skip)
-                     ("Load Local Result - Use pre-existing Marker output" . local)))
-         (mode-label (completing-read "Marker Mode: " (mapcar #'car mode-map) nil t))
+         ;; Use configured LLM tool name from Phase 1 configuration
+         (llm-tool (or fuji-llm-extraction-tool "marker"))
+         (mode-map `((,(format "High Quality (%s) - Better accuracy, supports figures" 
+                              (capitalize llm-tool)) . llm)
+                     ("Fast (pdftotext) - Quick text-only extraction" . fast)
+                     ("Offline - Use pre-extracted markdown" . offline)))
+         (mode-label (completing-read "Extraction method: " (mapcar #'car mode-map) nil t))
          (mode (cdr (assoc mode-label mode-map)))
          (filename (file-name-nondirectory pdf-file))
          (results-dir (fuji--get-cache-path pdf-file))
@@ -1640,30 +1715,34 @@ Choose processing mode:
                         (select-window win))))))))))
 
       (pcase mode
-        ('auto
-         (fuji--log "[STEP 1/3] Starting extraction with Marker (async)...")
-         ;; Use Marker extractor with async callback
-         (fuji--marker-extract pdf-file results-dir
-                               (lambda (md-file)
-                                 (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
-                                 (funcall extraction-callback md-file))))
+        ('llm
+         (fuji--log "[STEP 1/3] Starting extraction with %s (async)..." llm-tool)
+         ;; Use configured LLM extractor via unified plugin API
+         (let ((extractor (fuji-get-extractor llm-tool)))
+           (unless extractor
+             (error "Extractor '%s' not found. Please run M-x fuji-configure" llm-tool))
+           (funcall (fuji-extractor-extract-fn extractor)
+                    pdf-file results-dir
+                    (lambda (md-file)
+                      (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
+                      (funcall extraction-callback md-file)))))
         
-        ('skip
+        ('fast
          (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
-         ;; Use pdftotext extractor explicitly
+         ;; Use pdftotext extractor via unified plugin API
          (let ((md-file (fuji--extract pdf-file results-dir "pdftotext")))
            (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
            (funcall extraction-callback md-file)))
         
-        ('local
-         (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
-           (fuji--log "[STEP 1/3] Loading local Marker results from: %s" local-dir)
+        ('offline
+         (let ((local-dir (read-directory-name "Select directory with pre-extracted results: " nil nil t)))
+           (fuji--log "[STEP 1/3] Loading pre-extracted results from: %s" local-dir)
            (fuji--use-local-marker-result local-dir results-dir)
            (let ((md-file (fuji--find-marker-output results-dir)))
              (if md-file
                  (progn
-                   (fuji--log "[STEP 2/3] Marker results loaded. Ingesting content...")
+                   (fuji--log "[STEP 2/3] Pre-extracted results loaded. Ingesting content...")
                    (funcall extraction-callback md-file))
-               (error "Fuji: No .md file found in the selected directory!")))))))))
+               (error "Fuji: No .md file found in the selected directory!"))))))))))
 
 ;;; fuji.el ends here
