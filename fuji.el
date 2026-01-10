@@ -1770,3 +1770,4 @@ Choose extraction method:
                (error "Fuji: No .md file found in the selected directory!")))))
 
 ;;; fuji.el ends here
+))))))
