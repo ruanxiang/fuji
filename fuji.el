@@ -506,25 +506,28 @@ CALLBACK is called with the directory containing the results."
             (insert (make-string 40 ?-) "\n\n"))
           (display-buffer (current-buffer))))))))
 
-(defun fuji--select-pdf ()
-  "Select a PDF file. 
-If the current buffer is a PDF, use it. Otherwise, prompt for a file,
+(defun fuji--select-document ()
+  "Select a document file (PDF, DOCX, EPUB, HTML).
+If the current buffer is a supported document, use it. Otherwise, prompt for a file,
 favoring bib-search integration if available."
   (cond
-   ;; 1. Current buffer is a PDF
-   ((and buffer-file-name (string-match-p "\\.[pP][dD][fF]$" buffer-file-name))
+   ;; 1. Current buffer is a supported document
+   ((and buffer-file-name 
+         (string-match-p "\\.[pP][dD][fF]\\|\\.[dD][oO][cC][xX]?\\|\\.[eE][pP][uU][bB]\\|\\.[hH][tT][mM][lL]?$" 
+                        buffer-file-name))
     (let ((abs-path (expand-file-name buffer-file-name)))
-      (message "Fuji: Using current PDF buffer: %s" (file-name-nondirectory abs-path))
+      (message "Fuji: Using current document buffer: %s" (file-name-nondirectory abs-path))
       abs-path))
    
    ;; 2. Integration with ivy-bibtex (if the user wants to search by title)
    ((and (featurep 'ivy-bibtex)
          (y-or-n-p "Search bibliography for paper? "))
-    (user-error "Please use `M-x ivy-bibtex` and pick 'Open PDF' or 'Nexus Chat' (if configured)"))
+    (user-error "Please use `M-x ivy-bibtex` and pick 'Open PDF' or 'Fuji Chat' (if configured)"))
 
    ;; 3. Manual selection (fallback)
    (t
-    (let ((file (read-file-name "Select PDF: " (or fuji-bib-path default-directory) nil t)))
+    (let ((file (read-file-name "Select document (PDF/DOCX/EPUB/HTML): " 
+                                (or fuji-bib-path default-directory) nil t)))
       (expand-file-name (substitute-in-file-name (expand-file-name file)))))))
 
 (defun fuji--normalize-string (s)
@@ -1600,35 +1603,49 @@ BACKEND-NAME should be a registered backend or empty to clear override."
 
 ;;;###autoload
 (defun fuji-read ()
-  "Start reading and chatting with a research paper.
+  "Start reading and chatting with a research document.
+
+Supported formats: PDF, DOCX, EPUB, HTML
 
 This is the main entry point for Fuji. It will:
-1. Let you select a PDF file
-2. Process it with Marker (or skip for faster text-only mode)  
-3. Upload to Graphlit for RAG
+1. Let you select a document file
+2. Extract text using appropriate tool (Marker for PDF, Pandoc for others)
+3. Upload to RAG backend for semantic search
 4. Open a chat interface
 
-Choose processing mode:
-- Auto: Run Marker for high accuracy with figure support
-- Skip: Use pdftotext for fast text-only processing
-- Local: Load pre-existing Marker output from a directory"
+Choose extraction method:
+- High Quality: Use LLM-based tool (marker) for better accuracy with figure support (PDF only)
+- Fast: Use pdftotext (PDF) or pandoc (DOCX/EPUB/HTML) for quick extraction
+- Offline: Load pre-extracted markdown from a directory"
   (interactive)
   (fuji--ensure-config)
   (unless (fuji-verify-environment)
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
-  (let* ((pdf-file (fuji--select-pdf))
+  (let* ((doc-file (fuji--select-document))  ; Changed from fuji--select-pdf
+         ;; Determine document type
+         (doc-type (cond
+                    ((string-match-p "\\.pdf$" doc-file) "pdf")
+                    ((string-match-p "\\.docx?$" doc-file) "docx")
+                    ((string-match-p "\\.epub$" doc-file) "epub")
+                    ((string-match-p "\\.html?$" doc-file) "html")
+                    (t (error "Unsupported file type: %s" doc-file))))
          ;; Use configured LLM tool name from Phase 1 configuration
          (llm-tool (or fuji-llm-extraction-tool "marker"))
-         (mode-map `((,(format "High Quality (%s) - Better accuracy, supports figures" 
-                              (capitalize llm-tool)) . llm)
-                     ("Fast (pdftotext) - Quick text-only extraction" . fast)
-                     ("Offline - Use pre-extracted markdown" . offline)))
+         ;; Adjust extraction methods based on document type
+         (mode-map (if (string= doc-type "pdf")
+                       `((,(format "High Quality (%s) - Better accuracy, supports figures" 
+                                  (capitalize llm-tool)) . llm)
+                         ("Fast (pdftotext) - Quick text-only extraction" . fast)
+                         ("Offline - Use pre-extracted markdown" . offline))
+                     ;; For non-PDF, only pandoc and offline are available
+                     `(("Extract with Pandoc" . fast)
+                       ("Offline - Use pre-extracted markdown" . offline))))
          (mode-label (completing-read "Extraction method: " (mapcar #'car mode-map) nil t))
          (mode (cdr (assoc mode-label mode-map)))
-         (filename (file-name-nondirectory pdf-file))
-         (results-dir (fuji--get-cache-path pdf-file))
-         (pdf-buffer (find-file-noselect pdf-file))
+         (filename (file-name-nondirectory doc-file))
+         (results-dir (fuji--get-cache-path doc-file))
+         (doc-buffer (find-file-noselect doc-file))
          (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename)))
          (prog-buffer (get-buffer-create fuji-progress-buffer)))
 
@@ -1648,8 +1665,8 @@ Choose processing mode:
         (insert "# Waiting for document ingestion...\n\n")
         (insert "Progress is being tracked in the right buffer.")))
 
-    (fuji--setup-3-buffer-layout pdf-buffer chat-buffer prog-buffer)
-    (fuji--log "Workflow started in mode: %s" mode)
+    (fuji--setup-3-buffer-layout doc-buffer chat-buffer prog-buffer)
+    (fuji--log "Workflow started for %s document in mode: %s" doc-type mode)
 
     (let ((extraction-callback
            (lambda (md-file)
@@ -1658,7 +1675,7 @@ Choose processing mode:
                                   (buffer-string)))
                     ;; Save metadata for library manager
                     (metadata `((filename . ,filename)
-                                (pdf-path . ,pdf-file)
+                                (pdf-path . ,doc-file)
                                 (results-dir . ,results-dir))))
                (fuji--rag-ingest
                 md-content filename metadata
@@ -1673,11 +1690,11 @@ Choose processing mode:
                       (setq-local fuji--content-id content-id)
                       (setq-local fuji--filename filename)
                       (setq-local fuji--results-dir results-dir)
-                      (setq-local fuji--pdf-buffer pdf-buffer)
+                      (setq-local fuji--pdf-buffer doc-buffer)
                       (setq-local fuji--prog-buffer prog-buffer)
                       
                       ;; Hybrid mode only (proxy mode disabled)
-                      (let* ((md-file (expand-file-name (concat (file-name-base pdf-file) ".md")
+                      (let* ((md-file (expand-file-name (concat (file-name-base doc-file) ".md")
                                                         fuji--results-dir)))
                         (with-temp-file md-file
                           (insert md-content))
@@ -1717,22 +1734,29 @@ Choose processing mode:
       (pcase mode
         ('llm
          (fuji--log "[STEP 1/3] Starting extraction with %s (async)..." llm-tool)
-         ;; Use configured LLM extractor via unified plugin API
+         ;; Use configured LLM extractor via unified plugin API (PDF only)
          (let ((extractor (fuji-get-extractor llm-tool)))
            (unless extractor
              (error "Extractor '%s' not found. Please run M-x fuji-configure" llm-tool))
            (funcall (fuji-extractor-extract-fn extractor)
-                    pdf-file results-dir
+                    doc-file results-dir
                     (lambda (md-file)
                       (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
                       (funcall extraction-callback md-file)))))
-        
-        ('fast
-         (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
-         ;; Use pdftotext extractor via unified plugin API
-         (let ((md-file (fuji--extract pdf-file results-dir "pdftotext")))
-           (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
-           (funcall extraction-callback md-file)))
+                ('fast
+          (if (string= doc-type "pdf")
+              (progn
+                (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
+                ;; Use pdftotext for PDF
+                (let ((md-file (fuji--extract doc-file results-dir "pdftotext")))
+                  (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
+                  (funcall extraction-callback md-file)))
+            (progn
+              (fuji--log "[STEP 1/3] Extracting %s with Pandoc..." doc-type)
+              ;; Use Pandoc for non-PDF formats
+              (let ((md-file (fuji--extract doc-file results-dir "pandoc")))
+                (fuji--log "[STEP 2/3] Extraction complete. Ingesting content...")
+                (funcall extraction-callback md-file)))))
         
         ('offline
          (let ((local-dir (read-directory-name "Select directory with pre-extracted results: " nil nil t)))
