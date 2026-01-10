@@ -506,17 +506,28 @@ CALLBACK is called with the directory containing the results."
             (insert (make-string 40 ?-) "\n\n"))
           (display-buffer (current-buffer))))))))
 
+(defun fuji--is-plain-text-file (file-path)
+  "Check if FILE-PATH is a plain text file.
+Returns t if the file is plain text (readable as UTF-8/ASCII), nil otherwise.
+This checks the actual file content, not just the extension."
+  (when (and file-path (file-exists-p file-path))
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents file-path nil 0 1024) ; Read first 1KB
+          ;; Check if buffer contains only printable characters
+          (goto-char (point-min))
+          (not (re-search-forward "[^[:print:]\n\r\t]" nil t)))
+      (error nil))))
+
 (defun fuji--select-document ()
-  "Select a document file (PDF, DOCX, EPUB, HTML).
-If the current buffer is a supported document, use it. Otherwise, prompt for a file,
+  "Select a document file (any format).
+If the current buffer is a file, use it. Otherwise, prompt for a file,
 favoring bib-search integration if available."
   (cond
-   ;; 1. Current buffer is a supported document
-   ((and buffer-file-name 
-         (string-match-p "\\.[pP][dD][fF]\\|\\.[dD][oO][cC][xX]?\\|\\.[eE][pP][uU][bB]\\|\\.[hH][tT][mM][lL]?$" 
-                        buffer-file-name))
+   ;; 1. Current buffer has a file
+   ((and buffer-file-name (file-exists-p buffer-file-name))
     (let ((abs-path (expand-file-name buffer-file-name)))
-      (message "Fuji: Using current document buffer: %s" (file-name-nondirectory abs-path))
+      (message "Fuji: Using current buffer: %s" (file-name-nondirectory abs-path))
       abs-path))
    
    ;; 2. Integration with ivy-bibtex (if the user wants to search by title)
@@ -526,7 +537,7 @@ favoring bib-search integration if available."
 
    ;; 3. Manual selection (fallback)
    (t
-    (let ((file (read-file-name "Select document (PDF/DOCX/EPUB/HTML): " 
+    (let ((file (read-file-name "Select document: " 
                                 (or fuji-bib-path default-directory) nil t)))
       (expand-file-name (substitute-in-file-name (expand-file-name file)))))))
 
@@ -1622,25 +1633,37 @@ Choose extraction method:
   (unless (fuji-verify-environment)
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
-  (let* ((doc-file (fuji--select-document))  ; Changed from fuji--select-pdf
-         ;; Determine document type
-         (doc-type (cond
-                    ((string-match-p "\\.pdf$" doc-file) "pdf")
-                    ((string-match-p "\\.docx?$" doc-file) "docx")
-                    ((string-match-p "\\.epub$" doc-file) "epub")
-                    ((string-match-p "\\.html?$" doc-file) "html")
-                    (t (error "Unsupported file type: %s" doc-file))))
+  (let* ((doc-file (fuji--select-document))
+         ;; Determine document type: check if plain text first, then by extension
+         (is-plain-text (fuji--is-plain-text-file doc-file))
+         (doc-type (if is-plain-text
+                       "text"
+                     (cond
+                      ((string-match-p "\\.pdf$" doc-file) "pdf")
+                      ((string-match-p "\\.docx?$" doc-file) "docx")
+                      ((string-match-p "\\.epub$" doc-file) "epub")
+                      ((string-match-p "\\.html?$" doc-file) "html")
+                      (t "binary"))))
          ;; Use configured LLM tool name from Phase 1 configuration
          (llm-tool (or fuji-llm-extraction-tool "marker"))
          ;; Adjust extraction methods based on document type
-         (mode-map (if (string= doc-type "pdf")
-                       `((,(format "High Quality (%s) - Better accuracy, supports figures" 
-                                  (capitalize llm-tool)) . llm)
-                         ("Fast (pdftotext) - Quick text-only extraction" . fast)
-                         ("Offline - Use pre-extracted markdown" . offline))
-                     ;; For non-PDF, only pandoc and offline are available
+         (mode-map (cond
+                    ;; Plain text files: no extraction needed
+                    ((string= doc-type "text")
+                     '(("Direct (no extraction needed)" . direct)))
+                    ;; PDF: offer high quality or fast extraction
+                    ((string= doc-type "pdf")
+                     `((,(format "High Quality (%s) - Better accuracy, supports figures" 
+                                (capitalize llm-tool)) . llm)
+                       ("Fast (pdftotext) - Quick text-only extraction" . fast)
+                       ("Offline - Use pre-extracted markdown" . offline)))
+                    ;; Other binary formats: use Pandoc
+                    ((member doc-type '("docx" "epub" "html"))
                      `(("Extract with Pandoc" . fast)
-                       ("Offline - Use pre-extracted markdown" . offline))))
+                       ("Offline - Use pre-extracted markdown" . offline)))
+                    ;; Unknown binary format
+                    (t
+                     (error "Unsupported file type: %s (not plain text and no known extractor)" doc-file))))
          (mode-label (completing-read "Extraction method: " (mapcar #'car mode-map) nil t))
          (mode (cdr (assoc mode-label mode-map)))
          (filename (file-name-nondirectory doc-file))
@@ -1732,6 +1755,21 @@ Choose extraction method:
                         (select-window win))))))))))
 
       (pcase mode
+        ('direct
+         (fuji--log "[STEP 1/3] Reading plain text file directly (no extraction needed)...")
+         ;; For plain text files, read content directly and save as markdown
+         (let* ((text-content (with-temp-buffer
+                               (insert-file-contents doc-file)
+                               (buffer-string)))
+                (md-file (expand-file-name (concat (file-name-base doc-file) ".md")
+                                          results-dir)))
+           (unless (file-directory-p results-dir)
+             (make-directory results-dir t))
+           (with-temp-file md-file
+             (insert text-content))
+           (fuji--log "[STEP 2/3] Text file loaded. Ingesting content...")
+           (funcall extraction-callback md-file)))
+        
         ('llm
          (fuji--log "[STEP 1/3] Starting extraction with %s (async)..." llm-tool)
          ;; Use configured LLM extractor via unified plugin API (PDF only)
