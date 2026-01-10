@@ -1767,6 +1767,6 @@ Choose extraction method:
                  (progn
                    (fuji--log "[STEP 2/3] Pre-extracted results loaded. Ingesting content...")
                    (funcall extraction-callback md-file))
-               (error "Fuji: No .md file found in the selected directory!"))))))))))
+               (error "Fuji: No .md file found in the selected directory!")))))
 
 ;;; fuji.el ends here
