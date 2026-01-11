@@ -1,2 +1,9 @@
-node_modules
+
+*~
+.#*
+\#*\#
 *.backup
+# Development temporary files
+*.elc
+fuji-local-config.el
+node_modules
