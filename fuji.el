@@ -64,7 +64,7 @@ Valid values: \"graphlit\", \"local-vector\", etc., or nil to use global setting
 
 ;;;###autoload
 (defcustom fuji-marker-executable (or (executable-find "marker_single")
-                                             (executable-find "marker"))
+                                      (executable-find "marker"))
   "Path to the Marker executable. 
 Note: For processing single files, 'marker_single' is preferred."
   :type '(choice (const :tag "Not Set" nil)
@@ -270,11 +270,11 @@ Defaults to 'originals/' relative to cache directory if nil."
                               :command "node"
                               :args (list fuji-mcp-server-path)
                               :env `(:GRAPHLIT_ORGANIZATION_ID ,org-id
-                                     :GRAPHLIT_JWT_SECRET ,secret
-                                     :GRAPHLIT_ENVIRONMENT_ID ,env-id
-                                     ,@(when fuji-http-proxy
-                                         `(:HTTP_PROXY ,fuji-http-proxy
-                                           :HTTPS_PROXY ,fuji-http-proxy)))
+                                                               :GRAPHLIT_JWT_SECRET ,secret
+                                                               :GRAPHLIT_ENVIRONMENT_ID ,env-id
+                                                               ,@(when fuji-http-proxy
+                                                                   `(:HTTP_PROXY ,fuji-http-proxy
+                                                                                 :HTTPS_PROXY ,fuji-http-proxy)))
                               :syncp t))
       (fuji--log "[WARNING] Missing credentials for MCP registration."))))
 
@@ -333,7 +333,7 @@ Defaults to 'originals/' relative to cache directory if nil."
         (if (file-exists-p fuji-mcp-server-path)
             (insert "   [OK] JS file exists.\n")
           (insert "   [FAIL] JS file NOT FOUND.\n"))
-          
+        
         (let ((conn (gethash fuji-mcp-server-name mcp-server-connections)))
           (if conn
               (condition-case err
@@ -455,56 +455,56 @@ CALLBACK is called with the directory containing the results."
           (funcall callback existing-md))
       (progn
         (fuji--log "Starting Marker (%s) for %s..." 
-                          (file-name-nondirectory (or marker-exe "marker"))
-                          (file-name-nondirectory pdf-file))
-      (let* ((out-buf (get-buffer-create "*Nexus Marker Output*"))
-             (_ (with-current-buffer out-buf
-                  (unless enable-multibyte-characters
-                    (set-buffer-multibyte t))))
-             (process-environment (cons "PYTHONUNBUFFERED=1" process-environment))
-             (process (make-process
-                       :name "fuji-marker"
-                       :buffer out-buf
-                       :command (cons (or marker-exe "marker") marker-args)
-                       :connection-type 'pty
-                       :filter (lambda (proc string)
-                                 (when (buffer-live-p (process-buffer proc))
-                                   (with-current-buffer (process-buffer proc)
-                                     (let ((moving (= (point) (process-mark proc)))
-                                           (inhibit-read-only t))
-                                       (save-excursion
-                                         (goto-char (process-mark proc))
-                                         (insert (ansi-color-apply string))
-                                         (set-marker (process-mark proc) (point)))
-                                       (if moving (goto-char (process-mark proc)))))
-                                   ;; Also log to progress if it looks like a stage change
-                                   (when (string-match "Processing\\|Converting\\|Saving" string)
-                                     (fuji--log "Marker: %s" (string-trim (ansi-color-filter string))))))
-                       :sentinel (lambda (proc event)
-                                   (when (memq (process-status proc) '(exit signal))
-                                     (let ((exit-status (process-exit-status proc)))
-                                       (if (zerop exit-status)
-                                           (let ((final-md (fuji--find-marker-output cache-dir)))
-                                             (if final-md
-                                                 (progn
-                                                   (fuji--log "Marker finished successfully.")
-                                                   (funcall callback final-md))
-                                               (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
-                                                 (display-buffer (current-buffer))
-                                                 (fuji--log "Marker failed: No .md file found in %s" cache-dir)
-                                                 (error "Fuji: Marker finished but no .md file found in %s" cache-dir))))
-                                         (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
-                                           (display-buffer (current-buffer))
-                                           (fuji--log "Marker failed (%d): %s" exit-status event)
-                                           (error "Fuji: Marker failed (%d): %s. Check output for details." exit-status event)))))))))
-        (with-current-buffer out-buf
-          (let ((inhibit-read-only t))
-            (erase-buffer)
-            (insert "Fuji: Processing PDF with Marker (PTY mode)...\n")
-            (insert "Note: The FIRST run may take several minutes as it downloads AI models (several GB).\n")
-            (insert "Command: " (or marker-exe "marker") " " (mapconcat #'identity marker-args " ") "\n")
-            (insert (make-string 40 ?-) "\n\n"))
-          (display-buffer (current-buffer))))))))
+                   (file-name-nondirectory (or marker-exe "marker"))
+                   (file-name-nondirectory pdf-file))
+        (let* ((out-buf (get-buffer-create "*Nexus Marker Output*"))
+               (_ (with-current-buffer out-buf
+                    (unless enable-multibyte-characters
+                      (set-buffer-multibyte t))))
+               (process-environment (cons "PYTHONUNBUFFERED=1" process-environment))
+               (process (make-process
+                         :name "fuji-marker"
+                         :buffer out-buf
+                         :command (cons (or marker-exe "marker") marker-args)
+                         :connection-type 'pty
+                         :filter (lambda (proc string)
+                                   (when (buffer-live-p (process-buffer proc))
+                                     (with-current-buffer (process-buffer proc)
+                                       (let ((moving (= (point) (process-mark proc)))
+                                             (inhibit-read-only t))
+                                         (save-excursion
+                                           (goto-char (process-mark proc))
+                                           (insert (ansi-color-apply string))
+                                           (set-marker (process-mark proc) (point)))
+                                         (if moving (goto-char (process-mark proc)))))
+                                     ;; Also log to progress if it looks like a stage change
+                                     (when (string-match "Processing\\|Converting\\|Saving" string)
+                                       (fuji--log "Marker: %s" (string-trim (ansi-color-filter string))))))
+                         :sentinel (lambda (proc event)
+                                     (when (memq (process-status proc) '(exit signal))
+                                       (let ((exit-status (process-exit-status proc)))
+                                         (if (zerop exit-status)
+                                             (let ((final-md (fuji--find-marker-output cache-dir)))
+                                               (if final-md
+                                                   (progn
+                                                     (fuji--log "Marker finished successfully.")
+                                                     (funcall callback final-md))
+                                                 (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
+                                                   (display-buffer (current-buffer))
+                                                   (fuji--log "Marker failed: No .md file found in %s" cache-dir)
+                                                   (error "Fuji: Marker finished but no .md file found in %s" cache-dir))))
+                                           (with-current-buffer (get-buffer-create "*Nexus Marker Output*")
+                                             (display-buffer (current-buffer))
+                                             (fuji--log "Marker failed (%d): %s" exit-status event)
+                                             (error "Fuji: Marker failed (%d): %s. Check output for details." exit-status event)))))))))
+          (with-current-buffer out-buf
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert "Fuji: Processing PDF with Marker (PTY mode)...\n")
+              (insert "Note: The FIRST run may take several minutes as it downloads AI models (several GB).\n")
+              (insert "Command: " (or marker-exe "marker") " " (mapconcat #'identity marker-args " ") "\n")
+              (insert (make-string 40 ?-) "\n\n"))
+            (display-buffer (current-buffer))))))))
 
 (defun fuji--is-plain-text-file (file-path)
   "Check if FILE-PATH is a plain text file.
@@ -586,26 +586,26 @@ Call CALLBACK with content-id on success."
     (message "Fuji: Calling ingestText for %s (Text len: %d chars)..." filename text-len)
     (let* ((timer nil)
            (success-cb (lambda (result)
-                        (when timer (cancel-timer timer))
-                        (let* ((parsed (fuji--mcp-parse-result result))
-                               (content-id (and parsed (cdr (assoc 'id parsed)))))
-                          (if content-id
-                              (progn
-                                (fuji--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
-                                ;; Save metadata to cache
-                                (fuji--add-metadata-entry content-id filename pdf-path)
-                                (funcall callback content-id))
-                            (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
-                              (fuji--log "[FAILURE] %s" err-msg)
-                              (fuji--log "[HINT] This usually means Graphlit credentials are invalid or expired.")
-                              (fuji--log "[HINT] Please run M-x fuji-configure to update credentials.")
-                              (message "Fuji: Graphlit returned empty response. Check credentials with M-x fuji-configure")
-                              (error "Fuji: %s" err-msg))))))
-             (error-cb (lambda (err)
                          (when timer (cancel-timer timer))
-                         (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
-                           (fuji--log "[FAILURE] %s" err-msg)
-                           (error "Fuji: %s" err-msg)))))
+                         (let* ((parsed (fuji--mcp-parse-result result))
+                                (content-id (and parsed (cdr (assoc 'id parsed)))))
+                           (if content-id
+                               (progn
+                                 (fuji--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
+                                 ;; Save metadata to cache
+                                 (fuji--add-metadata-entry content-id filename pdf-path)
+                                 (funcall callback content-id))
+                             (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
+                               (fuji--log "[FAILURE] %s" err-msg)
+                               (fuji--log "[HINT] This usually means Graphlit credentials are invalid or expired.")
+                               (fuji--log "[HINT] Please run M-x fuji-configure to update credentials.")
+                               (message "Fuji: Graphlit returned empty response. Check credentials with M-x fuji-configure")
+                               (error "Fuji: %s" err-msg))))))
+           (error-cb (lambda (err)
+                       (when timer (cancel-timer timer))
+                       (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
+                         (fuji--log "[FAILURE] %s" err-msg)
+                         (error "Fuji: %s" err-msg)))))
       ;; Start the watchdog timer
       (setq timer (run-with-timer 60 nil
                                   (lambda ()
@@ -642,9 +642,9 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
           (message "Fuji ERROR: No MCP connection found for %s" fuji-mcp-server-name)
           (funcall error-callback "MCP server not connected"))
       (fuji--log "Querying Graphlit RAG (Content: %s, Conversation: %s) with prompt: %S" 
-                        (or (bound-and-true-p fuji--content-id) "Global")
-                        (or fuji--conversation-id "New")
-                        prompt)
+                 (or (bound-and-true-p fuji--content-id) "Global")
+                 (or fuji--conversation-id "New")
+                 prompt)
       (condition-case err
           (mcp-async-call-tool conn "promptConversation"
                                `((prompt . ,prompt)
@@ -652,7 +652,7 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
                                      `((contentIds . [,cid])))
                                  ,@(when fuji--conversation-id
                                      `((conversationId . ,fuji--conversation-id))))
-                                 (lambda (result)
+                               (lambda (result)
                                  (fuji--log "MCP response received. Rendering...")
                                  (when (buffer-live-p orig-buffer)
                                    (with-current-buffer orig-buffer
@@ -671,7 +671,7 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
                                          (let ((err-msg (format "MCP tool returned success but no answer found in result.")))
                                            (fuji--log "[FAILURE] %s" err-msg)
                                            (message "Fuji: %s Raw: %S" err-msg result)
-                                               (funcall error-callback err-msg)))))))
+                                           (funcall error-callback err-msg)))))))
                                (lambda (err)
                                  (message "Fuji: MCP error lambda triggered: %S" err)
                                  (when (buffer-live-p orig-buffer)
@@ -879,7 +879,7 @@ Please explain the figure based on the image and the provided context."
          (model (or fuji-gptel-vision-model gptel-model)))
     
     (gptel-request 
-            vision-prompt
+        vision-prompt
       :callback (lambda (response info)
                   (if (plist-get info :error)
                       (funcall error-callback (plist-get info :error))
@@ -974,8 +974,8 @@ This is used as a gptel tool in hybrid mode."
     (unless content-id
       (error "Fuji: Content ID not found in current buffer"))
     (let ((result (mcp-call-tool conn "promptConversation"
-                                `((prompt . ,query)
-                                  (contentIds . [,content-id])))))
+                                 `((prompt . ,query)
+                                   (contentIds . [,content-id])))))
       (fuji--mcp-parse-result result))))
 
 (defvar fuji-gptel-tool-graphlit
@@ -1051,14 +1051,14 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
                       
                       (if (eq fuji-chat-mode 'hybrid)
                           (progn
-                             (let* ((md-file (expand-file-name (concat (file-name-base pdf-file) ".md")
+                            (let* ((md-file (expand-file-name (concat (file-name-base pdf-file) ".md")
                                                               fuji--results-dir)))
-                               (with-temp-file md-file
-                                 (insert md-content))
-                               ;; Add the extracted MD file as context silently
-                               (when (fboundp 'gptel-add-file)
-                                 (let ((inhibit-message t))
-                                   (gptel-add-file md-file))))
+                              (with-temp-file md-file
+                                (insert md-content))
+                              ;; Add the extracted MD file as context silently
+                              (when (fboundp 'gptel-add-file)
+                                (let ((inhibit-message t))
+                                  (gptel-add-file md-file))))
                             
                             ;; Apply configured Backend & Model
                             (when fuji-gptel-backend
@@ -1098,9 +1098,9 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
         ('auto
          (fuji--log "[STEP 1/3] Starting Marker processing...")
          (fuji--process-pdf-with-marker pdf-file
-                                               (lambda (md)
-                                                 (fuji--log "[STEP 2/3] Marker finished. Ingesting content...")
-                                                 (funcall marker-callback md))))
+                                        (lambda (md)
+                                          (fuji--log "[STEP 2/3] Marker finished. Ingesting content...")
+                                          (funcall marker-callback md))))
         
         ('skip
          (fuji--log "[STEP 1/3] Skipping Marker, extracting text directly...")
@@ -1146,8 +1146,8 @@ Orchestrates PDF parsing via Marker and RAG via Graphlit."
   (interactive)
   (let* ((backends gptel--known-backends)
          (backend-name (completing-read "Select Backend: " 
-                                         (mapcar (lambda (b) (gptel-backend-name (cdr b))) 
-                                                 backends)))
+                                        (mapcar (lambda (b) (gptel-backend-name (cdr b))) 
+                                                backends)))
          (backend (gptel-get-backend backend-name))
          (model (completing-read "Select Model: " (gptel-backend-models backend))))
     (setq-local gptel-backend backend)
@@ -1258,10 +1258,10 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
               (insert-file-contents cache-file)
               (let ((json-object-type 'alist)
                     (json-key-type 'symbol)))
-          (error
-           (message "Fuji: Failed to load metadata cache: %s" (error-message-string err))
-           '()))
-      '()))))
+              (error
+               (message "Fuji: Failed to load metadata cache: %s" (error-message-string err))
+               '()))
+          '()))))
 
 (defun fuji--save-metadata-cache (cache)
   "Save CACHE (alist) to JSON file."
@@ -1338,7 +1338,7 @@ Automatically archives the original file and tracks document type."
   (let* ((cache (or (fuji--load-metadata-cache) '()))
          (id-key (if (stringp content-id) (intern content-id) content-id))
          (file-size (and (file-exists-p file-path) 
-                        (file-attribute-size (file-attributes file-path))))
+                         (file-attribute-size (file-attributes file-path))))
          ;; Determine document type from extension
          (doc-type (cond
                     ((string-match-p "\\.pdf$" file-path) "pdf")
@@ -1349,11 +1349,11 @@ Automatically archives the original file and tracks document type."
          ;; Archive the original file
          (archived-path (fuji--archive-file file-path))
          (metadata `((filename . ,filename)
-                    (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
-                    (file_size . ,(or file-size 0))
-                    (original_path . ,file-path)
-                    (archived_path . ,archived-path)  ; NEW: Phase 2.2
-                    (doc_type . ,doc-type))))          ; NEW: Phase 2.2
+                     (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
+                     (file_size . ,(or file-size 0))
+                     (original_path . ,file-path)
+                     (archived_path . ,archived-path)  ; NEW: Phase 2.2
+                     (doc_type . ,doc-type))))          ; NEW: Phase 2.2
     ;; Add or update entry
     (setq cache (cons (cons id-key metadata)
                       (assoc-delete-all id-key cache)))
@@ -1415,17 +1415,17 @@ Automatically archives the original file and tracks document type."
                    (metadata (fuji--get-metadata-for-id id))
                    ;; Use cached metadata if available
                    (name (if metadata
-                            (cdr (assoc 'filename metadata))
-                          (format "Content %s" (substring id 0 8))))
+                             (cdr (assoc 'filename metadata))
+                           (format "Content %s" (substring id 0 8))))
                    (date (if metadata
-                            (let ((upload-date (cdr (assoc 'upload_date metadata))))
-                              (if (stringp upload-date)
-                                  (substring upload-date 0 10)  ; Extract YYYY-MM-DD
-                                ("N/A")))
-                          "N/A"))
+                             (let ((upload-date (cdr (assoc 'upload_date metadata))))
+                               (if (stringp upload-date)
+                                   (substring upload-date 0 10)  ; Extract YYYY-MM-DD
+                                 ("N/A")))
+                           "N/A"))
                    (size (if metadata
-                            (fuji--format-file-size (cdr (assoc 'file_size metadata)))
-                          "N/A"))
+                             (fuji--format-file-size (cdr (assoc 'file_size metadata)))
+                           "N/A"))
                    (mime (or (cdr (assoc 'mimeType item)) "unknown"))
                    (id-short (substring id 0 (min 8 (length id)))))
               (list id (vector name id-short date size mime))))
@@ -1470,9 +1470,9 @@ Automatically archives the original file and tracks document type."
         ;; Use unified RAG API instead of Graphlit-specific call
         (dolist (id marked-ids)
           (fuji--rag-delete id (lambda (success)
-                                  (if success
-                                      (message "Fuji: Deleted %s" id)
-                                    (message "Fuji: Failed to delete %s" id)))))
+                                 (if success
+                                     (message "Fuji: Deleted %s" id)
+                                   (message "Fuji: Failed to delete %s" id)))))
         (message "Fuji: Deleting %d items..." (length marked-ids))
         ;; Refresh after a short delay to allow deletions to complete
         (run-with-timer 2 nil #'fuji-library-refresh)))))
@@ -1500,7 +1500,7 @@ Automatically archives the original file and tracks document type."
               (goto-char (point-min))
               (view-mode))
             (display-buffer (current-buffer))))
-       (message "No details available"))))
+      (message "No details available"))))
 
 ;;;###autoload
 (defun fuji-manage-content ()
@@ -1654,7 +1654,7 @@ Choose extraction method:
                     ;; PDF: offer high quality or fast extraction
                     ((string= doc-type "pdf")
                      `((,(format "High Quality (%s) - Better accuracy, supports figures" 
-                                (capitalize llm-tool)) . llm)
+                                 (capitalize llm-tool)) . llm)
                        ("Fast (pdftotext) - Quick text-only extraction" . fast)
                        ("Offline - Use pre-extracted markdown" . offline)))
                     ;; Other binary formats: use Pandoc
@@ -1759,10 +1759,10 @@ Choose extraction method:
          (fuji--log "[STEP 1/3] Reading plain text file directly (no extraction needed)...")
          ;; For plain text files, read content directly and save as markdown
          (let* ((text-content (with-temp-buffer
-                               (insert-file-contents doc-file)
-                               (buffer-string)))
+                                (insert-file-contents doc-file)
+                                (buffer-string)))
                 (md-file (expand-file-name (concat (file-name-base doc-file) ".md")
-                                          results-dir)))
+                                           results-dir)))
            (unless (file-directory-p results-dir)
              (make-directory results-dir t))
            (with-temp-file md-file
@@ -1781,20 +1781,20 @@ Choose extraction method:
                     (lambda (md-file)
                       (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
                       (funcall extraction-callback md-file)))))
-         ('fast
-          (if (string= doc-type "pdf")
-              (progn
-                (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
-                ;; Use pdftotext for PDF
-                (let ((md-file (fuji--extract doc-file results-dir "pdftotext")))
-                  (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
-                  (funcall extraction-callback md-file)))
-            (progn
-              (fuji--log "[STEP 1/3] Extracting %s with Pandoc..." doc-type)
-              ;; Use Pandoc for non-PDF formats
-              (let ((md-file (fuji--extract doc-file results-dir "pandoc")))
-                (fuji--log "[STEP 2/3] Extraction complete. Ingesting content...")
-                (funcall extraction-callback md-file)))))
+        ('fast
+         (if (string= doc-type "pdf")
+             (progn
+               (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
+               ;; Use pdftotext for PDF
+               (let ((md-file (fuji--extract doc-file results-dir "pdftotext")))
+                 (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
+                 (funcall extraction-callback md-file)))
+           (progn
+             (fuji--log "[STEP 1/3] Extracting %s with Pandoc..." doc-type)
+             ;; Use Pandoc for non-PDF formats
+             (let ((md-file (fuji--extract doc-file results-dir "pandoc")))
+               (fuji--log "[STEP 2/3] Extraction complete. Ingesting content...")
+               (funcall extraction-callback md-file)))))
         
         ('offline
          (let ((local-dir (read-directory-name "Select directory with pre-extracted results: " nil nil t)))
