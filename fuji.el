@@ -1566,7 +1566,7 @@ Automatically archives the original file and tracks document type."
   "Query all content from Graphlit via MCP and call CALLBACK with results."
   (let ((conn (fuji--get-mcp-connection)))
     (when conn
-      (condition-case err
+      (condition-case outer-err
           (mcp-async-call-tool conn "queryContents"
                                '()  ; No arguments needed for listing all
                                (lambda (result)
@@ -1585,12 +1585,12 @@ Automatically archives the original file and tracks document type."
                                        (funcall callback contents)
                                      (message "Fuji: No content found in Graphlit")
                                      (funcall callback nil))))
-                               (lambda (err)
+                               (lambda (inner-err)
                                  (message "Fuji: Failed to query contents: %s" 
-                                          (error-message-string err))
+                                          (error-message-string inner-err))
                                  (funcall callback nil)))
         (error
-         (message "Fuji: Query error: %s" (error-message-string err))
+         (message "Fuji: Query error: %s" (error-message-string outer-err))
          (funcall callback nil))))))
 
 ;;; Session-Specific Plugin Switching
