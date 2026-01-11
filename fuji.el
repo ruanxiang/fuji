@@ -1717,6 +1717,8 @@ Choose extraction method:
                 md-content filename metadata
                 (lambda (content-id)
                   (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
+                  ;; Archive the original file and save metadata
+                  (fuji--add-metadata-entry content-id filename doc-file)
                   (with-current-buffer chat-buffer
                     (let ((inhibit-read-only t)) 
                       (set-buffer-multibyte t)
