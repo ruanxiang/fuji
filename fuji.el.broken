@@ -1781,7 +1781,7 @@ Choose extraction method:
                     (lambda (md-file)
                       (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
                       (funcall extraction-callback md-file)))))
-         ('fast
+        ('fast
           (if (string= doc-type "pdf")
               (progn
                 (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
