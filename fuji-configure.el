@@ -235,6 +235,14 @@ Returns an alist of configured items to be saved."
     (when (string= (or (bound-and-true-p fuji-rag-backend-name) "") "graphlit")
       (setq config-items (append config-items (fuji-configure-graphlit))))
     
+    ;; Bibliography directory
+    (let ((bib-dir (read-directory-name 
+                    "Bibliography Directory (where your PDFs are stored): "
+                    (or (bound-and-true-p fuji-bib-path)
+                        (expand-file-name "~/Documents/Papers/"))
+                    nil t)))
+      (push (cons 'fuji-bib-path (expand-file-name bib-dir)) config-items))
+    
     ;; Cache and archive directories
     (let ((cache-dir (read-directory-name 
                       "Cache Directory: " 
