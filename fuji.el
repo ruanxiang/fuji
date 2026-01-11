@@ -1300,7 +1300,11 @@ Returns the path to the archived file, or nil if archiving fails."
         (let* ((hash (secure-hash 'sha256 file-path))
                (ext (file-name-extension file-path t))
                (archive-name (concat hash ext))
-               (archive-path (expand-file-name archive-name (fuji--get-originals-dir))))
+               (originals-dir (fuji--get-originals-dir))
+               (archive-path (expand-file-name archive-name originals-dir)))
+          ;; Ensure originals directory exists
+          (unless (file-directory-p originals-dir)
+            (make-directory originals-dir t))
           ;; Only copy if not already archived
           (unless (file-exists-p archive-path)
             (copy-file file-path archive-path t)
