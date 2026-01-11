@@ -252,8 +252,20 @@ Returns an alist of configured items to be saved."
           (originals-dir (read-directory-name 
                           "Originals Archive Directory: "
                           (fuji--get-originals-dir) nil t)))
-       (push (cons 'fuji-cache-directory (expand-file-name cache-dir)) config-items)
-       (push (cons 'fuji-originals-archive-dir (expand-file-name originals-dir)) config-items))
+      ;; Expand and ensure directories exist
+      (setq cache-dir (expand-file-name cache-dir))
+      (setq originals-dir (expand-file-name originals-dir))
+      
+      ;; Create directories if they don't exist
+      (unless (file-directory-p cache-dir)
+        (make-directory cache-dir t)
+        (message "Created cache directory: %s" cache-dir))
+      (unless (file-directory-p originals-dir)
+        (make-directory originals-dir t)
+        (message "Created originals directory: %s" originals-dir))
+      
+      (push (cons 'fuji-cache-directory cache-dir) config-items)
+      (push (cons 'fuji-originals-archive-dir originals-dir) config-items))
     
     (message "Fuji: Tool-specific configuration collected.")
     config-items))
