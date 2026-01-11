@@ -150,10 +150,16 @@ At runtime (fuji-read), user can choose between pdftotext, LLM tool, or offline.
   :group 'fuji)
 
 (defcustom fuji-rag-backend-name "graphlit"
-  "RAG backend to use for knowledge retrieval."
-  :type '(choice (const :tag "Graphlit (Current)" "graphlit")
+  "Which RAG/MCP backend to use for knowledge retrieval.
+- graphlit: Cloud-based RAG via MCP (requires credentials)
+- local-vector: Future local vector database option"
+  :type '(choice (const :tag "Graphlit (Cloud RAG via MCP)" "graphlit")
                  (const :tag "Local Vector DB (Future)" "local-vector"))
   :group 'fuji)
+
+;; Load local machine-specific configuration
+;; This must be after all defcustom declarations to avoid void-variable errors
+(fuji--load-local-config)
 
 ;; Tier 2: Tool-Specific Configuration
 (defcustom fuji-pdftotext-executable nil
