@@ -344,6 +344,10 @@ Saves all configuration to local machine-specific file."
     ;; Save all configuration to local file
     (fuji--save-local-config all-config)
     
+    ;; Reload configuration into current session
+    (fuji--load-local-config)
+    (message "Fuji: Configuration saved and loaded!")
+    
     (message "Fuji: Configuration complete! Run M-x fuji-validate-configuration to verify.")))
 
 ;;; Configuration Validation
