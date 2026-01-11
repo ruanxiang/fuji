@@ -154,7 +154,7 @@ CALLBACK is called with a list of content items (alists)."
     
     (message "Fuji: Listing Graphlit content...")
     
-    (condition-case err
+    (condition-case outer-err
         (mcp-async-call-tool conn "queryContents"
                              '()  ; No arguments needed for listing all
                              (lambda (result)
@@ -173,12 +173,12 @@ CALLBACK is called with a list of content items (alists)."
                                      (funcall callback contents)
                                    (message "Fuji: No content found in Graphlit")
                                    (funcall callback nil))))
-                             (lambda (err)
+                             (lambda (inner-err)
                                (message "Fuji: Failed to query contents: %s" 
-                                        (error-message-string err))
+                                        (error-message-string inner-err))
                                (funcall callback nil)))
       (error
-       (message "Fuji: Query error: %s" (error-message-string err))
+       (message "Fuji: Query error: %s" (error-message-string outer-err))
        (funcall callback nil)))))
 
 (defun fuji--graphlit-delete (content-id callback)
@@ -190,7 +190,7 @@ CALLBACK is called with t on success, nil on failure."
     
     (message "Fuji: Deleting from Graphlit (ID: %s)..." content-id)
     
-    (condition-case err
+    (condition-case outer-err
         (mcp-async-call-tool conn "deleteContent"
                              `((id . ,content-id))
                              (lambda (result)
@@ -203,11 +203,11 @@ CALLBACK is called with t on success, nil on failure."
                                        (funcall callback t))
                                    (message "Fuji: Delete operation completed (response: %s)" result)
                                    (funcall callback nil))))
-                             (lambda (err)
-                               (message "Fuji: Delete failed: %s" (error-message-string err))
+                             (lambda (inner-err)
+                               (message "Fuji: Delete failed: %s" (error-message-string inner-err))
                                (funcall callback nil)))
       (error
-       (message "Fuji: Delete session error: %s" (error-message-string err))
+       (message "Fuji: Delete session error: %s" (error-message-string outer-err))
        (funcall callback nil)))))
 
 (defun fuji--graphlit-get-metadata (content-id)
