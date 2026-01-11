@@ -3,17 +3,14 @@
 ;; Copyright (C) 2025 ruanxiang
 ;; Author: ruanxiang
 ;; Version: 0.1
-;; Package-Requires: ((emacs "29.1") (gptel "0.1") (org-ref "3.0") (mcp "0.1"))
-;; Keywords: hypermedia, docs, multimedia
-;; URL: https://github.com/ruanxiang/Fuji
-
-;; License: MIT
+;; Package-Requires: ((emacs "29.1") (gptel "0.9.0") (mcp "0.1.0"))
+;; Keywords: tools, convenience, AI, PDF, research
+;; URL: https://github.com/ruanxiang/fuji
 
 ;;; Commentary:
-
-;; Fuji is a high-fidelity, multimodal research assistant.
-;; It orchestrates Marker for PDF parsing, Graphlit for RAG,
-;; and gptel for interaction.
+;; Fuji provides an AI-powered academic reading workflow for Emacs.
+;; It integrates PDF extraction, RAG (Retrieval-Augmented Generation),
+;; and chat interfaces to help researchers interact with academic papers.
 
 ;;; Code:
 
