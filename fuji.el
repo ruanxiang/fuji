@@ -399,6 +399,8 @@ Defaults to 'originals/' relative to cache directory if nil."
   (condition-case err
       (progn
         ;; 1. Check Marker
+        (unless fuji-marker-executable
+          (error "Marker executable not configured. Please run M-x fuji-configure"))
         (unless (file-executable-p fuji-marker-executable)
           (error "Marker executable not found or not executable at: %s" fuji-marker-executable))
         
@@ -408,10 +410,14 @@ Defaults to 'originals/' relative to cache directory if nil."
             (error "Graphlit Organization ID or Secret missing in auth-source")))
         
         ;; 3. Check Bib Path
+        (unless fuji-bib-path
+          (error "Bibliography path not configured. Please run M-x fuji-configure"))
         (unless (file-directory-p fuji-bib-path)
           (error "Bibliography directory not found: %s" fuji-bib-path))
 
         ;; 4. Ensure Cache exists
+        (unless fuji-cache-directory
+          (error "Cache directory not configured. Please run M-x fuji-configure"))
         (unless (file-directory-p fuji-cache-directory)
           (make-directory fuji-cache-directory t))
 
