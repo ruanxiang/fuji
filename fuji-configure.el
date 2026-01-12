@@ -315,7 +315,8 @@ Returns an alist of config items."
     (push (cons 'fuji-gptel-model chat-model) config-items)
     
     (unless (string-empty-p vis-backend-name)
-      (push (cons 'fuji-gptel-vision-backend (intern vis-backend-name)) config-items))
+      ;; Save as string, not symbol - this prevents "void-variable Gemini" errors
+      (push (cons 'fuji-gptel-vision-backend vis-backend-name) config-items))
     (unless (string-empty-p vis-model)
       (push (cons 'fuji-gptel-vision-model vis-model) config-items))
     
