@@ -116,9 +116,10 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
       - [X] If archived copy is also missing, fallback to opening the extracted text (Markdown) as read-only.
 - [ ] 3. Multi-Format Expansion (Pandoc Integration)
   - [ ] Implement "Extractor" abstraction for DOCX, EPUB, and HTML using Pandoc.
-  - [ ] Add support for Web URLs:
-    - [ ] Mode A: Local conversion (via eww/pandoc) -> Upload Markdown.
-    - [ ] Mode B: Remote conversion (Graphlit `ingestUri`) -> **Fetch extracted text back to local cache** for consistency.
+  - [ ] Add support for Web URLs (Web-to-PDF Strategy):
+    - [ ] Implement `fuji-web.el` to convert URLs to PDF using Headless Chrome.
+    - [ ] Update `fuji-configure.el` to detecting `google-chrome` or `chromium`.
+    - [ ] Unified Workflow: URL -> PDF (via Chrome) -> Markdown (via Marker/pdftotext) -> Graphlit.
 - [ ] 4. Dual Entry Points: Direct File Open & Library Manager
   - [ ] **Direct File Open Mode** (`M-x fuji-read`):
     - [ ] Detect if current file is already in library cache.

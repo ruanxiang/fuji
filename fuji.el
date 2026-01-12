@@ -38,6 +38,7 @@
 (require 'fuji-extractor)
 (require 'fuji-extractor-marker)
 (require 'fuji-extractor-pdftotext)
+(require 'fuji-web)
 (require 'fuji-extractor-pandoc)
 (require 'fuji-rag)
 (require 'fuji-rag-graphlit)
@@ -546,9 +547,11 @@ favoring bib-search integration if available."
 
    ;; 3. Manual selection (fallback)
    (t
-    (let ((file (read-file-name "Select document: " 
-                                (or fuji-bib-path default-directory) nil t)))
-      (expand-file-name (substitute-in-file-name (expand-file-name file)))))))
+    (let ((file (read-file-name "Select document (or URL): " 
+                                (or fuji-bib-path default-directory) nil nil))) ;; nil = allow non-matching input (URLs)
+      (if (string-match-p "^https?://" (file-name-nondirectory file))
+          (file-name-nondirectory file) ;; It's a URL, return it as-is (basename)
+        (expand-file-name (substitute-in-file-name (expand-file-name file))))))))
 
 (defun fuji--normalize-string (s)
   "Ensure S is a multibyte string."
@@ -1488,7 +1491,13 @@ Choose extraction method:
   (unless (fuji-verify-environment)
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
-  (let* ((doc-file (fuji--select-document))
+  (let* ((raw-input (fuji--select-document))
+         ;; If input is a URL, convert it to PDF first
+         (doc-file (if (string-match-p "^https?://" raw-input)
+                       (progn
+                         (message "Fuji: Web URL detected. Converting to PDF...")
+                         (fuji--web-to-pdf raw-input (fuji--get-originals-dir)))
+                     raw-input))
          ;; Determine document type: check if plain text first, then by extension
          (is-plain-text (fuji--is-plain-text-file doc-file))
          (doc-type (if is-plain-text

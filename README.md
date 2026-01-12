@@ -45,6 +45,9 @@ graph TD
 - **Marker**: Installed in a local Python environment.
   > [!IMPORTANT]
   > First-time use of Marker requires downloading models (~数GB), which can take a long time and significant bandwidth. It is highly recommended to run Marker at least once from the terminal (`marker /path/to/any.pdf --output_dir /tmp/test`) to ensure models are cached before using it within Emacs.
+- **Google Chrome / Chromium**: Required for Web Document support (Headless mode).
+  > [!TIP]
+  > Fuji can auto-detect your Chrome installation, or you can specify the path in `fuji-configure`.
 - **Graphlit Account**: API Organization ID and Secret.
 - **gptel**: For the LLM frontend.
 - **org-ref / citar**: For literature management.

@@ -37,6 +37,15 @@
   (or (bound-and-true-p fuji-pandoc-executable)
       (executable-find "pandoc")))
 
+(defun fuji--auto-detect-chrome ()
+  "Auto-detect Google Chrome or Chromium binary path."
+  (or (bound-and-true-p fuji-chrome-executable)
+      (executable-find "google-chrome-stable")
+      (executable-find "google-chrome")
+      (executable-find "chromium")
+      (executable-find "chromium-browser")
+      (executable-find "chrome")))
+
 (defun fuji--get-originals-dir ()
   "Get the originals archive directory path."
   (or (bound-and-true-p fuji-originals-archive-dir)
@@ -103,6 +112,8 @@ This is a one-time migration for existing users."
       (push (cons 'fuji-gptel-vision-backend fuji-gptel-vision-backend) config-items))
     (when (boundp 'fuji-gptel-vision-model)
       (push (cons 'fuji-gptel-vision-model fuji-gptel-vision-model) config-items))
+    (when (boundp 'fuji-chrome-executable)
+      (push (cons 'fuji-chrome-executable fuji-chrome-executable) config-items))
     
     (if config-items
         (progn
@@ -230,6 +241,18 @@ Returns an alist of configured items to be saved."
                           (read-file-name "Path to pandoc: " nil nil t))))
        (when pandoc-path
          (push (cons 'fuji-pandoc-executable (expand-file-name pandoc-path)) config-items)))
+    
+    ;; Headless Chrome (required for Web-to-PDF)
+    (let* ((detected (fuji--auto-detect-chrome))
+           (chrome-path (if detected
+                            (read-file-name
+                             (format "Path to Chrome/Chromium [%s]: " detected)
+                             (file-name-directory detected)
+                             detected t nil
+                             (lambda (f) (file-executable-p f)))
+                          (read-file-name "Path to Chrome/Chromium: " nil nil t))))
+       (when (and chrome-path (not (string-empty-p chrome-path)))
+         (push (cons 'fuji-chrome-executable (expand-file-name chrome-path)) config-items)))
     
     ;; Graphlit credentials (if selected)
     (when (string= (or (bound-and-true-p fuji-rag-backend-name) "") "graphlit")
@@ -399,6 +422,12 @@ Saves all configuration to local machine-specific file."
       (if (and pandoc (file-executable-p pandoc))
           (message "✓ pandoc: %s" pandoc)
         (push "pandoc not found or not executable (required for DOCX/EPUB)" warnings)))
+
+    ;; Check Chrome
+    (let ((chrome (fuji--auto-detect-chrome)))
+      (if (and chrome (file-executable-p chrome))
+          (message "✓ Chrome: %s" chrome)
+        (push "Google Chrome/Chromium not found (required for Web URL support)" warnings)))
     
     ;; Check Graphlit if selected
     (when (string= (or (bound-and-true-p fuji-rag-backend-name) "") "graphlit")
