@@ -89,16 +89,16 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
                                 (message "Fuji: Graphlit ingestion complete (ID: %s)" content-id)
                                 (funcall callback content-id))
                             (error "Graphlit ingestion failed to return ID: %s" result)))))
-           (error-cb (lambda (err)
+           (error-cb (lambda (inner-err)
                        (when timer (cancel-timer timer))
-                       (error "Graphlit ingestion error: %s" (error-message-string err)))))
+                       (error "Graphlit ingestion error: %s" (error-message-string inner-err)))))
       
       ;; Start watchdog timer
       (setq timer (run-with-timer 60 nil
                                   (lambda ()
                                     (message "Fuji: [WARNING] Graphlit ingestion timeout after 60s"))))
       
-      (condition-case err
+      (condition-case outer-err
           (mcp-async-call-tool conn "ingestText"
                                `((text . ,text)
                                  (name . ,filename)
@@ -107,7 +107,7 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
                                error-cb)
         (error
          (when timer (cancel-timer timer))
-         (error "Graphlit MCP call error: %s" (error-message-string err)))))))
+         (error "Graphlit MCP call error: %s" (error-message-string outer-err)))))))
 
 (defun fuji--graphlit-query (query content-ids callback)
   "Query CONTENT-IDS with QUERY using Graphlit.
@@ -127,7 +127,7 @@ CALLBACK is called with the answer string."
                        ((vectorp content-ids) content-ids)
                        (t []))))
       
-      (condition-case err
+      (condition-case outer-err
           (mcp-async-call-tool conn "promptConversation"
                                `((prompt . ,query)
                                  ,@(when (> (length ids-vector) 0)
@@ -140,10 +140,10 @@ CALLBACK is called with the answer string."
                                    (if answer
                                        (funcall callback answer)
                                      (error "Graphlit query returned no answer: %s" result))))
-                               (lambda (err)
-                                 (error "Graphlit query error: %s" (error-message-string err))))
+                               (lambda (inner-err)
+                                 (error "Graphlit query error: %s" (error-message-string inner-err))))
         (error
-         (error "Graphlit MCP call error: %s" (error-message-string err)))))))
+         (error "Graphlit MCP call error: %s" (error-message-string outer-err)))))))
 
 (defun fuji--graphlit-list (callback)
   "List all content in Graphlit.
