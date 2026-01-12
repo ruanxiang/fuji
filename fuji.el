@@ -1504,7 +1504,10 @@ Choose extraction method:
                        "text"
                      (cond
                       ((string-match-p "\\.pdf$" doc-file) "pdf")
-                      ((string-match-p "\\.docx?$" doc-file) "docx")
+                      ((string-match-p "\\.docx$" doc-file) "docx")
+                      ((string-match-p "\\.doc$" doc-file) "doc")
+                      ((string-match-p "\\.xlsx?$" doc-file) "xlsx")
+                      ((string-match-p "\\.pptx?$" doc-file) "pptx")
                       ((string-match-p "\\.epub$" doc-file) "epub")
                       ((string-match-p "\\.html?$" doc-file) "html")
                       (t "binary"))))
@@ -1525,6 +1528,12 @@ Choose extraction method:
                     ((member doc-type '("docx" "epub" "html"))
                      `(("Extract with Pandoc" . fast)
                        ("Offline - Use pre-extracted markdown" . offline)))
+                    ;; Legacy .doc
+                    ((string= doc-type "doc")
+                     (user-error "Legacy .doc format is not supported. Please convert to .docx or PDF and try again."))
+                    ;; Excel/PowerPoint
+                    ((member doc-type '("xlsx" "pptx"))
+                     (user-error "Spreadsheets/Slides are not supported directly. Please convert to .docx or PDF and try again."))
                     ;; Unknown binary format
                     (t
                      (error "Unsupported file type: %s (not plain text and no known extractor)" doc-file))))
