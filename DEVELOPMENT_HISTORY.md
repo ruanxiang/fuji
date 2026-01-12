@@ -89,11 +89,37 @@ This file tracks the development history across multiple Antigravity conversatio
 **Git History**:
 - 3 commits on `phase2` branch
 - Total changes: +173 insertions, -70 deletions
-- Ready to merge to `main`
-
 ---
 
-## Next Steps (Phase 3)
+### Session 5: Phase 2 Completion & Troubleshooting (Conversation: current)
+**Date**: 2026-01-12
+**Status**: ✅ Complete, ready for merge
+
+**Achievements**:
+- **Configuration Persistence**:
+  - Implemented local machine-specific configuration (`~/.emacs.d/fuji-local-config.el`)
+  - Replaced `customize-save-variable` to avoid cloud-sync conflicts
+  - Added migration tool `fuji-migrate-config`
+
+- **Syntax & Stability**:
+  - Validated and fixed complex bracket imbalances in `fuji.el`
+  - Created `check_brackets.py` tool for regression testing
+
+- **Ingestion Reliability**:
+  - Diagnosed and fixed Graphlit ingestion hangs (caused by `void-function` error)
+  - Implemented repeating progress timer (every 5s) for better UX
+  - Added JSON pre-validation to ensure content integrity before MCP transmission
+  - Verified full file upload (63KB) success
+
+- **Bug Fixes**:
+  - Fixed `void-variable Gemini` issue via `fuji-init-fix.el`
+  - Fixed `pdf-tools` redisplay error via advice
+
+**Key Files Created/Modified**:
+- `fuji-rag-graphlit.el` - Fixed logging bug, improved timer
+- `fuji-init-fix.el` - Workarounds for Gemini and Redisplay errors
+- `check_brackets.py` - Dev tool
+
 
 According to `TODO.org`, future phases could include:
 

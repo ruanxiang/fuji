@@ -77,26 +77,40 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
     (unless conn
       (error "Graphlit MCP connection not available"))
     
-    (message "Fuji: Ingesting to Graphlit... (len: %d chars)" (length text))
+    (message "Fuji: Ingesting '%s' to Graphlit... (len: %d chars, approx %.2f KB)" 
+             filename (length text) (/ (string-bytes text) 1024.0))
+
+    ;; Verify content integrity before sending to MCP
+    (condition-case err
+        (let ((_ (json-encode text)))
+          (message "Fuji: Content integrity verified."))
+      (error
+       (error "Fuji: Content validation failed (JSON serialization error): %s" 
+              (error-message-string err))))
     
     (let* ((timer nil)
+           (start-time (float-time))
            (success-cb (lambda (result)
                         (when timer (cancel-timer timer))
                         (let* ((parsed (fuji--graphlit-parse-result result))
                                (content-id (and parsed (cdr (assoc 'id parsed)))))
                           (if content-id
                               (progn
-                                (message "Fuji: Graphlit ingestion complete (ID: %s)" content-id)
+                                (message "Fuji: Graphlit ingestion complete (ID: %s). Total time: %.1fs" 
+                                         content-id (- (float-time) start-time))
                                 (funcall callback content-id))
                             (error "Graphlit ingestion failed to return ID: %s" result)))))
            (error-cb (lambda (inner-err)
                        (when timer (cancel-timer timer))
                        (error "Graphlit ingestion error: %s" (error-message-string inner-err)))))
       
-      ;; Start watchdog timer
-      (setq timer (run-with-timer 60 nil
+      ;; Start repeating progress timer (every 5 seconds)
+      (setq timer (run-with-timer 5 5
                                   (lambda ()
-                                    (message "Fuji: [WARNING] Graphlit ingestion timeout after 60s"))))
+                                    (let ((elapsed (- (float-time) start-time)))
+                                      (if (> elapsed 300)
+                                          (message "Fuji: [WARNING] Graphlit ingestion taking longer than usual (>300s)...")
+                                        (message "Fuji: Ingesting to Graphlit... (%.0fs elapsed)" elapsed))))))
       
       (condition-case outer-err
           (mcp-async-call-tool conn "ingestText"

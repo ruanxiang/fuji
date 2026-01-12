@@ -17,4 +17,14 @@ This is a workaround for compatibility with certain Emacs configurations."))
 
 (provide 'fuji-init-fix)
 
+;; Workaround for "Error during redisplay: (eval (pdf-misc-size-indication) t)"
+;; This error happens when pdf-tools returns an invalid type for the modeline.
+(with-eval-after-load 'pdf-tools
+  (when (fboundp 'pdf-misc-size-indication)
+    (advice-add 'pdf-misc-size-indication :around
+                (lambda (orig-fun &rest args)
+                  (condition-case nil
+                      (apply orig-fun args)
+                    (error ""))))))
+
 ;;; fuji-init-fix.el ends here

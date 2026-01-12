@@ -583,54 +583,6 @@ Handles various formats of RESULT (plists, hash-tables, symbols)."
          (message "Fuji: JSON parse error for result: %S" text-val)
          `((answer . ,text-val) (message . ,text-val)))))))
 
-(defun fuji--ingest-to-graphlit (text filename pdf-path callback)
-  "Ingest TEXT for FILENAME from PDF-PATH to Graphlit via MCP.
-Call CALLBACK with content-id on success."
-  (fuji--ensure-config)
-  (fuji--log "[STEP 2/3] Ingesting content via MCP tool 'ingestText'...")
-  (let* ((conn (fuji--get-mcp-connection))
-         (text-len (length text)))
-    (unless conn
-      (error "Fuji: MCP connection not available"))
-    (message "Fuji: Calling ingestText for %s (Text len: %d chars)..." filename text-len)
-    (let* ((timer nil)
-           (success-cb (lambda (result)
-                         (when timer (cancel-timer timer))
-                         (let* ((parsed (fuji--mcp-parse-result result))
-                                (content-id (and parsed (cdr (assoc 'id parsed)))))
-                           (if content-id
-                               (progn
-                                 (fuji--log "[SUCCESS] Ingestion completed. Content ID: %s" content-id)
-                                 ;; Save metadata to cache
-                                 (fuji--add-metadata-entry content-id filename pdf-path)
-                                 (funcall callback content-id))
-                             (let ((err-msg (format "MCP Ingestion failed to return ID: %s" result)))
-                               (fuji--log "[FAILURE] %s" err-msg)
-                               (fuji--log "[HINT] This usually means Graphlit credentials are invalid or expired.")
-                               (fuji--log "[HINT] Please run M-x fuji-configure to update credentials.")
-                               (message "Fuji: Graphlit returned empty response. Check credentials with M-x fuji-configure")
-                               (error "Fuji: %s" err-msg))))))
-           (error-cb (lambda (err)
-                       (when timer (cancel-timer timer))
-                       (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
-                         (fuji--log "[FAILURE] %s" err-msg)
-                         (error "Fuji: %s" err-msg)))))
-      ;; Start the watchdog timer
-      (setq timer (run-with-timer 60 nil
-                                  (lambda ()
-                                    (fuji--log "[WARNING] Ingestion watchdog triggered: No response from MCP server after 60s.")
-                                    (message "Fuji: [WARNING] Ingestion taking too long. Check MCP server status."))))
-      (condition-case err
-          (mcp-async-call-tool conn "ingestText"
-                               `((text . ,text)
-                                 (name . ,filename)
-                                 (type . "Markdown"))
-                               success-cb
-                               error-cb)
-        (error
-         (let ((err-msg (format "MCP tool session error: %s" (error-message-string err))))
-           (fuji--log "[FAILURE] %s" err-msg)
-           (error "Fuji: %s" err-msg)))))))
 
 (defvar-local fuji--content-id nil "Graphlit content ID for the current paper.")
 (defvar-local fuji--filename nil "Filename of the current paper.")
@@ -654,7 +606,7 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
                  (or (bound-and-true-p fuji--content-id) "Global")
                  (or fuji--conversation-id "New")
                  prompt)
-      (condition-case err
+      (condition-case outer-err
           (mcp-async-call-tool conn "promptConversation"
                                `((prompt . ,prompt)
                                  ,@(when-let* ((cid (bound-and-true-p fuji--content-id)))
@@ -681,18 +633,16 @@ Calls SUCCESS-CALLBACK with answer on success, or ERROR-CALLBACK on failure."
                                            (fuji--log "[FAILURE] %s" err-msg)
                                            (message "Fuji: %s Raw: %S" err-msg result)
                                            (funcall error-callback err-msg)))))))
-                               (lambda (err)
-                                 (message "Fuji: MCP error lambda triggered: %S" err)
+                               (lambda (inner-err)
+                                 (message "Fuji: MCP error lambda triggered: %S" inner-err)
                                  (when (buffer-live-p orig-buffer)
                                    (with-current-buffer orig-buffer
-                                     (let ((err-msg (format "MCP tool call error: %s" (error-message-string err))))
+                                     (let ((err-msg (format "MCP tool call error: %s" (error-message-string inner-err))))
                                        (fuji--log "[FAILURE] %s" err-msg)
-                                       (funcall error-callback err-msg))))))
+                                       (funcall error-callback err-msg)))))))
         (error
-         (let ((err-msg (format "MCP session logic error: %s" (error-message-string err))))
-           (message "Fuji: %s" err-msg)
-           (fuji--log "[FAILURE] %s" err-msg)
-           (funcall error-callback err-msg)))))))
+         (message "Fuji: MCP call failed: %s" (error-message-string outer-err))
+         (funcall error-callback (format "MCP error: %s" (error-message-string outer-err)))))))
 
 ;;; gptel Integration
 
@@ -945,7 +895,7 @@ Prompts for content deletion and kills related buffers."
   (fuji--log "Deleting content %s via MCP tool 'deleteContent'..." content-id)
   (let ((conn (gethash fuji-mcp-server-name mcp-server-connections)))
     (when conn
-      (condition-case err
+      (condition-case outer-err
           (mcp-async-call-tool conn "deleteContent"
                                `((id . ,content-id))
                                (lambda (result)
@@ -958,10 +908,10 @@ Prompts for content deletion and kills related buffers."
                                          ;; Remove from metadata cache
                                          (fuji--remove-metadata-entry content-id))
                                      (fuji--log "[INFO] Delete operation completed (response: %s)" result))))
-                               (lambda (err)
-                                 (fuji--log "[FAILURE] Delete failed: %s" (error-message-string err))))
+                               (lambda (inner-err)
+                                 (fuji--log "[FAILURE] Delete failed: %s" (error-message-string inner-err))))
         (error
-         (fuji--log "[FAILURE] Delete session error: %s" (error-message-string err)))))))
+         (fuji--log "[FAILURE] Delete session error: %s" (error-message-string outer-err)))))))
 
 
 (defun fuji--setup-buffer-header (filename content-id)
@@ -998,141 +948,7 @@ This is used as a gptel tool in hybrid mode."
   "The gptel tool for Graphlit RAG retrieval.")
 
 ;;;###autoload
-(defun rx/gptel-ref-chat ()
-  "Start a multimodal AI chat for a research paper.
-Orchestrates PDF parsing via Marker and RAG via Graphlit."
-  (interactive)
-  (fuji--ensure-config)
-  (unless (fuji-verify-environment)
-    (error "Fuji: Environment not ready. Run M-x fuji-configure"))
-  
-  (let* ((pdf-file (fuji--select-pdf))
-         (mode-map '(("Auto (Run Marker) - High accuracy, supports figures" . auto)
-                     ("Skip (pdftotext) - Fast, text only, lower accuracy" . skip)
-                     ("Load Local Result - Use pre-existing Marker output" . local)))
-         (mode-label (completing-read "Marker Mode: " (mapcar #'car mode-map) nil t))
-         (mode (cdr (assoc mode-label mode-map)))
-         (filename (file-name-nondirectory pdf-file))
-         (results-dir (fuji--get-cache-path pdf-file))
-         (pdf-buffer (find-file-noselect pdf-file))
-         (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename)))
-         (prog-buffer (get-buffer-create fuji-progress-buffer)))
 
-    ;; Initial UI Setup
-    (with-current-buffer prog-buffer
-      (let ((inhibit-read-only t))
-        (set-buffer-multibyte t)
-        (erase-buffer)
-        (insert "Fuji Progress: " filename "\n" (make-string 40 ?-) "\n\n")
-        (setq-local cursor-type nil)
-        (view-mode 1)))
-    
-    (with-current-buffer chat-buffer
-      (let ((inhibit-read-only t))
-        (set-buffer-multibyte t)
-        (erase-buffer)
-        (insert "# Waiting for document ingestion...\n\n")
-        (insert "Progress is being tracked in the right buffer.")))
-
-    (fuji--setup-3-buffer-layout pdf-buffer chat-buffer prog-buffer)
-    (fuji--log "Workflow started in mode: %s" mode)
-
-    (let ((marker-callback
-           (lambda (md-file)
-             (let* ((md-content (with-temp-buffer
-                                  (insert-file-contents md-file)
-                                  (buffer-string))))
-               (fuji--ingest-to-graphlit
-                md-content filename pdf-file
-                (lambda (content-id)
-                  (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
-                  (with-current-buffer chat-buffer
-                    (let ((inhibit-read-only t)) 
-                      (set-buffer-multibyte t)
-                      (erase-buffer)
-                      (org-mode)
-                      
-                      (setq-local fuji--content-id content-id)
-                      (setq-local fuji--filename filename)
-                      (setq-local fuji--results-dir results-dir)
-                      (setq-local fuji--pdf-buffer pdf-buffer)
-                      (setq-local fuji--prog-buffer prog-buffer)
-                      
-                      (if (eq fuji-chat-mode 'hybrid)
-                          (progn
-                            (let* ((md-file (expand-file-name (concat (file-name-base pdf-file) ".md")
-                                                              fuji--results-dir)))
-                              (with-temp-file md-file
-                                (insert md-content))
-                              ;; Add the extracted MD file as context silently
-                              (when (fboundp 'gptel-add-file)
-                                (let ((inhibit-message t))
-                                  (gptel-add-file md-file))))
-                            
-                            ;; Apply configured Backend & Model
-                            (when fuji-gptel-backend
-                              (let ((be (gptel-get-backend fuji-gptel-backend)))
-                                (when be (setq-local gptel-backend be))))
-                            (when fuji-gptel-model
-                              (setq-local gptel-model fuji-gptel-model))
-
-                            ;; 3. Configure system directive
-                            (setq-local gptel-directives 
-                                        (cons '(fuji . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
-                                              gptel-directives))
-                            (setq-local gptel-default-directive 'fuji)
-                            
-                            ;; 4. Register Graphlit as a gptel tool if available
-                            (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-                              (setq-local gptel-tools (list fuji-gptel-tool-graphlit))))
-                        
-                        ;; Proxy mode logic
-                        (setq-local gptel-backend (make-fuji-gptel-backend
-                                                   :name "Fuji-Graphlit"
-                                                   :models '(Graphlit-RAG)))
-                        (setq-local gptel-model 'Graphlit-RAG))
-                      
-                      (insert "\n* ") ;; Initial user prompt
-                      (gptel-mode)
-                      (fuji-mode 1)
-                      (fuji--setup-buffer-header filename content-id)
-                      (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
-                      (fuji--log "[SUCCESS] Chat initialization complete. Ready!")
-                      (goto-char (point-max))
-                      ;; Auto-focus the chat window
-                      (when-let* ((win (get-buffer-window chat-buffer)))
-                        (select-window win))))))))))
-
-      (pcase mode
-        ('auto
-         (fuji--log "[STEP 1/3] Starting Marker processing...")
-         (fuji--process-pdf-with-marker pdf-file
-                                        (lambda (md)
-                                          (fuji--log "[STEP 2/3] Marker finished. Ingesting content...")
-                                          (funcall marker-callback md))))
-        
-        ('skip
-         (fuji--log "[STEP 1/3] Skipping Marker, extracting text directly...")
-         (let ((md-file (expand-file-name "skipped_marker.md" results-dir)))
-           (unless (file-directory-p results-dir) (make-directory results-dir t))
-           (with-temp-file md-file
-             (insert "# " filename "\n\n")
-             (insert "> [!NOTE]\n")
-             (insert "> Marker processing skipped. This is a text-only ingestion using pdftotext.\n\n")
-             (insert (fuji--get-pdf-text pdf-file)))
-           (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
-           (funcall marker-callback md-file)))
-        
-        ('local
-         (let ((local-dir (read-directory-name "Select directory with Marker results: " nil nil t)))
-           (fuji--log "[STEP 1/3] Loading local Marker results from: %s" local-dir)
-           (fuji--use-local-marker-result local-dir results-dir)
-           (let ((md-file (fuji--find-marker-output results-dir)))
-             (if md-file
-                 (progn
-                   (fuji--log "[STEP 2/3] Marker results loaded. Ingesting content...")
-                   (funcall marker-callback md-file))
-               (error "Fuji: No .md file found in the selected directory!")))))))))
 
 ;;; Interactive Configuration Interfaces
 
@@ -1266,11 +1082,12 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
             (with-temp-buffer
               (insert-file-contents cache-file)
               (let ((json-object-type 'alist)
-                    (json-key-type 'symbol)))
-              (error
-               (message "Fuji: Failed to load metadata cache: %s" (error-message-string err))
-               '()))
-          '()))))
+                    (json-key-type 'symbol))
+                (json-read-from-string (buffer-string))))
+          (error
+           (message "Fuji: Failed to load metadata cache: %s" (error-message-string err))
+           '()))
+      '())))
 
 (defun fuji--save-metadata-cache (cache)
   "Save CACHE (alist) to JSON file."
@@ -1822,5 +1639,8 @@ Choose extraction method:
                    (funcall extraction-callback md-file))
                (error "Fuji: No .md file found in the selected directory!")))))
 
-;;; fuji.el ends here
 ))))
+
+(provide 'fuji)
+
+;;; fuji.el ends here
