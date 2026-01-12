@@ -106,14 +106,14 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
     - [ ] Plugin selections (which extractor/RAG backend for each file type)
     - [ ] Tool-specific configurations
 
-- [ ] 2. Storage & Archiving (Calibre-style)
-  - [ ] Implement automatic (optional) file archiving to `~/.cache/fuji/originals/`.
-  - [ ] Update metadata cache to track `original_path`, `archived_path`, and `doc_type`.
-  - [ ] Storage Strategy:
-    - [ ] Archive Copy: Copy the original file (PDF/DOCX) to `originals/` folder.
-    - [ ] Handle "Broken Links": 
-      - [ ] If original is missing, try opening the archived copy in `originals/`.
-      - [ ] If archived copy is also missing, fallback to opening the extracted text (Markdown) as read-only.
+- [X] 2. Storage & Archiving (Calibre-style)
+  - [X] Implement automatic (optional) file archiving to `~/.cache/fuji/originals/`.
+  - [X] Update metadata cache to track `original_path`, `archived_path`, and `doc_type`.
+  - [X] Storage Strategy:
+    - [X] Archive Copy: Copy the original file (PDF/DOCX) to `originals/` folder.
+    - [X] Handle "Broken Links": 
+      - [X] If original is missing, try opening the archived copy in `originals/`.
+      - [X] If archived copy is also missing, fallback to opening the extracted text (Markdown) as read-only.
 - [ ] 3. Multi-Format Expansion (Pandoc Integration)
   - [ ] Implement "Extractor" abstraction for DOCX, EPUB, and HTML using Pandoc.
   - [ ] Add support for Web URLs:

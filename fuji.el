@@ -1162,9 +1162,10 @@ Signals an error if no file can be found."
       (error "Cannot locate file for content ID: %s" content-id)))))
 
 
-(defun fuji--add-metadata-entry (content-id filename file-path)
+(defun fuji--add-metadata-entry (content-id filename file-path &optional results-dir)
   "Add metadata entry for CONTENT-ID with FILENAME and FILE-PATH.
-Automatically archives the original file and tracks document type."
+Automatically archives the original file and tracks document type.
+If RESULTS-DIR is provided, it is stored to allow deleting extracted content later."
   (let* ((cache (or (fuji--load-metadata-cache) '()))
          (id-key (if (stringp content-id) (intern content-id) content-id))
          (file-size (and (file-exists-p file-path) 
@@ -1182,8 +1183,9 @@ Automatically archives the original file and tracks document type."
                      (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
                      (file_size . ,(or file-size 0))
                      (original_path . ,file-path)
-                     (archived_path . ,archived-path)  ; NEW: Phase 2.2
-                     (doc_type . ,doc-type))))          ; NEW: Phase 2.2
+                     (archived_path . ,archived-path)
+                     (results_dir . ,results-dir)   ; NEW: Track results directory
+                     (doc_type . ,doc-type))))
     ;; Add or update entry
     (setq cache (cons (cons id-key metadata)
                       (assoc-delete-all id-key cache)))
@@ -1299,10 +1301,33 @@ Automatically archives the original file and tracks document type."
       (when (yes-or-no-p (format "Delete %d item(s) from %s? " (length marked-ids) fuji-rag-backend))
         ;; Use unified RAG API instead of Graphlit-specific call
         (dolist (id marked-ids)
+          ;; 1. Local Cleanup (Original and Extracted Results)
+          (let ((metadata (fuji--get-metadata-for-id id)))
+            (when metadata
+              (let ((archived (cdr (assoc 'archived_path metadata)))
+                    (results (cdr (assoc 'results_dir metadata))))
+                ;; Delete archived file
+                (when (and archived (file-exists-p archived))
+                  (condition-case err
+                      (progn
+                        (delete-file archived)
+                        (message "Fuji: Deleted archived file %s" archived))
+                    (error (message "Fuji: Failed to delete archived file: %s" err))))
+                ;; Delete results directory
+                (when (and results (file-directory-p results))
+                  (condition-case err
+                      (progn
+                        (delete-directory results t)
+                        (message "Fuji: Deleted results directory %s" results))
+                    (error (message "Fuji: Failed to delete results directory: %s" err))))))
+            ;; Remove from metadata cache
+            (fuji--remove-metadata-entry id))
+          
+          ;; 2. Remote Deletion (Graphlit)
           (fuji--rag-delete id (lambda (success)
                                  (if success
-                                     (message "Fuji: Deleted %s" id)
-                                   (message "Fuji: Failed to delete %s" id)))))
+                                     (message "Fuji: Deleted %s from RAG backend" id)
+                                   (message "Fuji: Failed to delete %s from RAG backend" id)))))
         (message "Fuji: Deleting %d items..." (length marked-ids))
         ;; Refresh after a short delay to allow deletions to complete
         (run-with-timer 2 nil #'fuji-library-refresh)))))
@@ -1535,7 +1560,7 @@ Choose extraction method:
                 (lambda (content-id)
                   (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
                   ;; Archive the original file and save metadata
-                  (fuji--add-metadata-entry content-id filename doc-file)
+                  (fuji--add-metadata-entry content-id filename doc-file results-dir)
                   (with-current-buffer chat-buffer
                     (let ((inhibit-read-only t)) 
                       (set-buffer-multibyte t)
