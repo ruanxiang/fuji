@@ -114,12 +114,12 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
     - [X] Handle "Broken Links": 
       - [X] If original is missing, try opening the archived copy in `originals/`.
       - [X] If archived copy is also missing, fallback to opening the extracted text (Markdown) as read-only.
-- [ ] 3. Multi-Format Expansion (Pandoc Integration)
-  - [ ] Implement "Extractor" abstraction for DOCX, EPUB, and HTML using Pandoc.
-  - [ ] Add support for Web URLs (Web-to-PDF Strategy):
-    - [ ] Implement `fuji-web.el` to convert URLs to PDF using Headless Chrome.
-    - [ ] Update `fuji-configure.el` to detecting `google-chrome` or `chromium`.
-    - [ ] Unified Workflow: URL -> PDF (via Chrome) -> Markdown (via Marker/pdftotext) -> Graphlit.
+- [X] 3. Multi-Format Expansion (Pandoc Integration)
+  - [X] Implement "Extractor" abstraction for DOCX, EPUB, and HTML using Pandoc.
+  - [X] Add support for Web URLs (Web-to-PDF Strategy):
+    - [X] Implement `fuji-web.el` to convert URLs to PDF using Headless Chrome.
+    - [X] Update `fuji-configure.el` to detecting `google-chrome` or `chromium`.
+    - [X] Unified Workflow: URL -> PDF (via Chrome) -> Markdown (via Marker/pdftotext) -> Graphlit.
 - [ ] 4. Dual Entry Points: Direct File Open & Library Manager
   - [ ] **Direct File Open Mode** (`M-x fuji-read`):
     - [ ] Detect if current file is already in library cache.
