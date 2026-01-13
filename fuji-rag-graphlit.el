@@ -90,6 +90,7 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
     
     (let* ((timer nil)
            (start-time (float-time))
+           (ingest-name (format "%s-%d" filename (floor (float-time))))
            (success-cb (lambda (result)
                         (when timer (cancel-timer timer))
                         (let* ((parsed (fuji--graphlit-parse-result result))
@@ -99,7 +100,7 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
                                 (message "Fuji: Graphlit ingestion complete (ID: %s). Total time: %.1fs" 
                                          content-id (- (float-time) start-time))
                                 (funcall callback content-id))
-                            (error "Graphlit ingestion failed to return ID: %s" result)))))
+                            (error "Graphlit ingestion failed to return ID. Result: %s" result)))))
            (error-cb (lambda (inner-err)
                        (when timer (cancel-timer timer))
                        (error "Graphlit ingestion error: %s" (error-message-string inner-err)))))
@@ -115,8 +116,9 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
       (condition-case outer-err
           (mcp-async-call-tool conn "ingestText"
                                `((text . ,text)
-                                 (name . ,filename)
-                                 (type . "Markdown"))
+                                 (name . ,ingest-name)
+                                 (mimeType . "text/markdown")
+                                 (isSynchronous . t))
                                success-cb
                                error-cb)
         (error
