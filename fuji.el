@@ -220,6 +220,15 @@ Defaults to 'originals/' relative to cache directory if nil."
       (set-window-buffer (selected-window) pdf-buffer)
       (set-window-buffer chat-win chat-buffer))))
 
+(defun fuji--setup-2-buffer-layout (chat-buffer progress-buffer)
+  "Arrange windows: Chat full width, Progress at the bottom.
+Used for non-visual documents (DOCX, EPUB) where raw buffer is binary."
+  (delete-other-windows)
+  (let* ((prog-win (split-window-below -5))) ;; Create a 5-line window at the bottom
+    (set-window-buffer prog-win progress-buffer)
+    (set-window-dedicated-p prog-win t) ;; Make it dedicated
+    (set-window-buffer (selected-window) chat-buffer)))
+
 (defun fuji--save-auth-entry (org-id secret)
   "Save Graphlit ORG-ID and SECRET to `~/.authinfo`."
   (let* ((auth-file (expand-file-name "~/.authinfo"))
@@ -546,12 +555,28 @@ favoring bib-search integration if available."
     (user-error "Please use `M-x ivy-bibtex` and pick 'Open PDF' or 'Fuji Chat' (if configured)"))
 
    ;; 3. Manual selection (fallback)
+   ;; 3. Manual selection (fallback)
    (t
-    (let ((file (read-file-name "Select document (or URL): " 
-                                (or fuji-bib-path default-directory) nil nil))) ;; nil = allow non-matching input (URLs)
-      (if (string-match-p "^https?://" (file-name-nondirectory file))
-          (file-name-nondirectory file) ;; It's a URL, return it as-is (basename)
-        (expand-file-name (substitute-in-file-name (expand-file-name file))))))))
+    (let* ((file (read-file-name "Select document (or URL): " 
+                                (or fuji-bib-path default-directory) nil nil))
+           (abs-path (expand-file-name (substitute-in-file-name (expand-file-name file))))
+           (nondir (file-name-nondirectory (directory-file-name file)))) ;; handle trailing slash
+      
+      (cond
+       ;; A. If it exists as a file, favor the file
+       ((file-exists-p abs-path)
+        abs-path)
+       
+       ;; B. Detect URL pattern in the path (e.g. pasted https://... inside a path)
+       ((string-match "\\(https?://[^ ]+\\)" file)
+        (match-string 1 file))
+       
+       ;; C. Detect www. prefix in the filename part
+       ((string-match "^www\\." nondir)
+        (concat "https://" nondir))
+       
+       ;; D. Default: Return absolute path
+       (t abs-path))))))
 
 (defun fuji--normalize-string (s)
   "Ensure S is a multibyte string."
@@ -1496,7 +1521,7 @@ Choose extraction method:
          (doc-file (if (string-match-p "^https?://" raw-input)
                        (progn
                          (message "Fuji: Web URL detected. Converting to PDF...")
-                         (fuji--web-to-pdf raw-input (fuji--get-originals-dir)))
+                         (fuji--web-to-pdf raw-input temporary-file-directory))
                      raw-input))
          ;; Determine document type: check if plain text first, then by extension
          (is-plain-text (fuji--is-plain-text-file doc-file))
@@ -1541,7 +1566,20 @@ Choose extraction method:
          (mode (cdr (assoc mode-label mode-map)))
          (filename (file-name-nondirectory doc-file))
          (results-dir (fuji--get-cache-path doc-file))
-         (doc-buffer (find-file-noselect doc-file))
+         (doc-buffer (cond
+                      ;; PDF/Text: Open the file directly
+                      ((or (string= doc-type "pdf") (string= doc-type "text"))
+                       (find-file-noselect doc-file))
+                      ;; Binary (DOCX/EPUB): Create a placeholder view buffer
+                      (t
+                       (let ((buf (get-buffer-create (format "*Fuji View: %s*" filename))))
+                         (with-current-buffer buf
+                           (let ((inhibit-read-only t))
+                             (view-mode 0)
+                             (erase-buffer)
+                             (insert (format "Extracting content from %s...\n\nPreview will appear here shortly." filename))
+                             (view-mode 1)))
+                         buf))))
          (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename)))
          (prog-buffer (get-buffer-create fuji-progress-buffer)))
 
@@ -1566,6 +1604,15 @@ Choose extraction method:
 
     (let ((extraction-callback
            (lambda (md-file)
+             ;; If we used a placeholder buffer, populate it now
+             (unless (or (string= doc-type "pdf") (string= doc-type "text"))
+               (with-current-buffer doc-buffer
+                 (let ((inhibit-read-only t))
+                   (view-mode 0)
+                   (erase-buffer)
+                   (insert-file-contents md-file)
+                   (markdown-mode)
+                   (view-mode 1))))
              (let* ((md-content (with-temp-buffer
                                   (insert-file-contents md-file)
                                   (buffer-string)))
