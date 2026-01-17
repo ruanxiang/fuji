@@ -895,7 +895,7 @@ Also clears any global gptel context to ensure a clean exit."
 
 
 ;;;###autoload
-(defun rx/fuji-quit ()
+(defun fuji-quit ()
   "Unified command to quit the current Fuji session.
 Prompts for content deletion and kills related buffers."
   (interactive)
@@ -991,21 +991,20 @@ This is used as a gptel tool in hybrid mode."
 
 ;;; Interactive Configuration Interfaces
 
-(defvar fuji-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c n m") #'rx/fuji-set-model)
-    (define-key map (kbd "C-c n a") #'rx/fuji-add-context)
-    (define-key map (kbd "C-c n s") #'rx/fuji-manage-mcp)
-    (define-key map (kbd "C-c n q") #'rx/fuji-quit)
-    map)
+(defvar fuji-mode-map (make-sparse-keymap)
   "Keymap for `fuji-mode'.")
+
+(define-key fuji-mode-map (kbd "C-c n m") #'fuji-session-set-model)
+(define-key fuji-mode-map (kbd "C-c n a") #'fuji-session-add-context)
+(define-key fuji-mode-map (kbd "C-c n s") #'fuji-mcp-manage)
+(define-key fuji-mode-map (kbd "C-c n q") #'fuji-quit)
 
 (define-minor-mode fuji-mode
   "Minor mode for Fuji chat buffers."
   :lighter " Nexus"
   :keymap fuji-mode-map)
 
-(defun rx/fuji-set-model ()
+(defun fuji-session-set-model ()
   "Interactively set the gptel model and backend for the current Nexus session."
   (interactive)
   (let* ((backends gptel--known-backends)
@@ -1019,7 +1018,7 @@ This is used as a gptel tool in hybrid mode."
     (fuji--log "Model updated to %s (%s)" model backend-name)
     (message "Fuji: Model set to %s" model)))
 
-(defun rx/fuji-add-context ()
+(defun fuji-session-add-context ()
   "Interactively add a file as context to the current Nexus session."
   (interactive)
   (let ((file (read-file-name "Add file to context: ")))
@@ -1034,7 +1033,7 @@ This is used as a gptel tool in hybrid mode."
       (fuji--log "Context added: %s" (file-name-nondirectory file))
       (message "Fuji: File '%s' added to context." (file-name-nondirectory file))))))
 
-(defun rx/fuji-manage-mcp ()
+(defun fuji-mcp-manage ()
   "Interactively manage (restart/register) the MCP server."
   (interactive)
   (if (y-or-n-p "Restart current Graphlit MCP server? ")
@@ -1377,7 +1376,7 @@ Creates the directory if it doesn't exist."
   (expand-file-name (format "%s.org" content-id)
                     (fuji--get-sessions-dir)))
 
-(defun fuji--save-session ()
+(defun fuji-save-session ()
   "Save the current chat buffer content to a session file."
   (interactive)
   (when (and fuji--content-id (buffer-live-p (current-buffer)))
@@ -1475,7 +1474,7 @@ Creates the directory if it doesn't exist."
           (gptel-mode)
           (fuji-mode 1)
           ;; Auto-save hooks
-          (add-hook 'kill-buffer-hook #'fuji--save-session nil t)
+          (add-hook 'kill-buffer-hook #'fuji-save-session nil t)
           (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
           
           (goto-char (point-max))
@@ -2190,7 +2189,7 @@ Choose extraction method:
                           (gptel-mode)
                           (fuji-mode 1)
                           ;; Hooks
-                          (add-hook 'kill-buffer-hook #'fuji--save-session nil t)
+                          (add-hook 'kill-buffer-hook #'fuji-save-session nil t)
                           (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
                           
                           (fuji--log "[SUCCESS] Chat initialization complete. Ready!")

@@ -164,9 +164,10 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
     - [X] **MCP Update**: Allow `query_graphlit` to accept a list of content IDs for scoped search.
     - [X] **UI**: Standalone Chat Buffer (`*Fuji-Group-Chat*`) without specific document window.
 
-- [ ] 5. Command & Namespace Refactoring
-  - [ ] Rename package commands to better reflect the "Library" concept (e.g., `fuji-read`, `fuji-manager`).
-  - [ ] Consolidate command names to be more intuitive for the new workflow.
+- [X] **Phase 5: Command & Namespace Refactoring**
+  - [X] Rename `rx/` commands to `fuji-` (e.g., `fuji-quit`)
+  - [X] Rename `fuji--save-session` to `fuji-save-session`
+  - [X] Update keybindings to map to new command names
 - [ ] 6. (Optional/Ambitious) Bibliography & Research Notes
   - [ ] DOI support: Auto-fetch metadata from CrossRef/OpenAlex.
   - [ ] Basic `org-ref` compatibility for looking up papers in the library.
