@@ -164,29 +164,14 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
     - [X] **MCP Update**: Allow `query_graphlit` to accept a list of content IDs for scoped search.
     - [X] **UI**: Standalone Chat Buffer (`*Fuji-Group-Chat*`) without specific document window.
 
-- [X] **Phase 5: Command & Namespace Refactoring**
-  - [X] Rename `rx/` commands to `fuji-` (e.g., `fuji-quit`)
-  - [X] Rename `fuji--save-session` to `fuji-save-session`
-  - [X] Update keybindings to map to new command names
+- [ ] 5. Command & Namespace Refactoring
+  - [ ] Rename package commands to better reflect the "Library" concept (e.g., `fuji-read`, `fuji-manager`).
+  - [ ] Consolidate command names to be more intuitive for the new workflow.
 - [ ] 6. (Optional/Ambitious) Bibliography & Research Notes
   - [ ] DOI support: Auto-fetch metadata from CrossRef/OpenAlex.
   - [ ] Basic `org-ref` compatibility for looking up papers in the library.
 
-** TODO Universal Reading Workflow Expansion
-*** Universal File Support
-- Support non-PDF inputs: .txt, .org, .docx (via pandoc), and URL (via eww/url-retrieve).
-- Abstract the "Extractor" layer: Input File -> [Extractor] -> Markdown Text.
-*** Hybrid Storage & Ingestion Strategy
-- Default: Upload only extracted text to Graphlit (saves storage quota).
-- Option: "Upload Original" for rich PDF/DOCX processing if quota permits.
-- Integration: Inject extracted text start-chunk into gptel context for immediate awareness.
-*** Personal Knowledge Base (Library & Memo)
-- Implement : A tabulated view of all read articles.
-- Local Persistence: Auto-create  to store:
-  - Metadata (Title, Author, Year)
-  - User Memos/Notes
-  - Chat Summary & Key Q&A
-- "Resume Reading": Opening a paper from Library restores its  and opens its Note buffer.
+
 *** Vision & Configuration
 - Vision: Allow right-click on image links (from Marker) to "Ask Vision Model".
 - Config: Add  and other direct config wrappers to bypass UI menus.
