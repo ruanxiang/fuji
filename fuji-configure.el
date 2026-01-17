@@ -267,17 +267,19 @@ Returns an alist of configured items to be saved."
       (push (cons 'fuji-bib-path (expand-file-name bib-dir)) config-items))
     
     ;; Cache and archive directories
-    (let ((cache-dir (read-directory-name 
-                      "Cache Directory: " 
-                      (or (bound-and-true-p fuji-cache-directory)
-                          (expand-file-name "fuji-cache/" user-emacs-directory))
-                      nil t))
-          (originals-dir (read-directory-name 
-                          "Originals Archive Directory: "
-                          (fuji--get-originals-dir) nil t)))
+    (let* ((cache-dir (read-directory-name 
+                       "Cache Directory: " 
+                       (or (bound-and-true-p fuji-cache-directory)
+                           (expand-file-name "fuji-cache/" user-emacs-directory))
+                       nil t))
+           (originals-name (read-string 
+                            "Originals Directory Name (inside cache): " 
+                            "originals"))
+           (originals-dir (expand-file-name originals-name cache-dir)))
+      
       ;; Expand and ensure directories exist
       (setq cache-dir (expand-file-name cache-dir))
-      (setq originals-dir (expand-file-name originals-dir))
+      ;; originals-dir is already expanded against cache-dir
       
       ;; Create directories if they don't exist
       (unless (file-directory-p cache-dir)

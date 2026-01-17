@@ -120,34 +120,54 @@ See [[file:/home/ruan/.gemini/antigravity/brain/de9814b7-ce79-4551-9c77-0b78c5b2
     - [X] Implement `fuji-web.el` to convert URLs to PDF using Headless Chrome.
     - [X] Update `fuji-configure.el` to detecting `google-chrome` or `chromium`.
     - [X] Unified Workflow: URL -> PDF (via Chrome) -> Markdown (via Marker/pdftotext) -> Graphlit.
-- [ ] 4. Dual Entry Points: Direct File Open & Library Manager
-  - [ ] **Direct File Open Mode** (`M-x fuji-read`):
-    - [ ] Detect if current file is already in library cache.
-    - [ ] If new: Extract -> Upload -> Open Chat Buffer.
-    - [ ] If existing: Restore session -> Reconnect Graphlit context -> Open Chat Buffer.
-  - [ ] **Library Manager Mode** (`M-x fuji-manager`):
-    - [ ] Display tabulated list of all library items.
-    - [ ] Support mark/delete/refresh operations.
-    - [ ] Enter on item: Open original file (if exists) + Chat Buffer side-by-side.
-    - [ ] Exit behavior: Return to Library Manager (no deletion prompts).
-- [ ] 5. Enhanced Library Manager UI
-  - [ ] Support custom "Memo/Notes" field for each library entry.
-  - [ ] Add "Add New File" interactive command from the manager.
-  - [ ] Improved visual layout (Icons/Tags for file types).
-- [ ] 6. Integrated Reading Experience
-  - [ ] Refactor Progress UI: Move status messages from separate buffer to Chat Buffer (Top-level Org block).
-  - [ ] **Chat Session Persistence**:
-    - [ ] Auto-save chat buffer content to a local file (e.g., `[cache]/sessions/[id].org`).
-    - [ ] Auto-load: When re-opening a library item, restore the previous conversation history and reconnect to the Graphlit/gptel context.
-  - [ ] UI Fix: Ensure cursor automatically moves to `point-max` in chat buffers.
-  - [ ] Window Management: Define exit behavior (return to Library Manager or close gracefully).
-- [ ] 7. Long-term Knowledge Strategy
-  - [ ] Default to persistent Graphlit storage (Avoid immediate `fuji--delete-from-graphlit`).
-  - [ ] Implement "Purge" command in manager for manual cleanup.
-- [ ] 8. Command & Namespace Refactoring
+- [X] 4. Library Manager & Persistent Sessions
+  - [X] **Data Model Update**:
+    - [X] Add `file_hash` (SHA-256) to metadata for duplicate detection.
+    - [X] Add `memo` (User notes) and `title` (Editable display name) fields.
+  - [X] **Direct File Open Mode** (`M-x fuji-read`):
+    - [X] **Pre-check**: Calculate file hash -> Check Library.
+    - [X] **If Existing**: Restore session (`fuji--resume-reading`) & Context.
+    - [X] **If New**: Extract -> Ingest -> Init Session -> Save Metadata (w/ Hash).
+  - [X] **Session Persistence**:
+    - [X] Auto-save chat buffers to `~/.cache/fuji/sessions/[id].org`.
+    - [X] Auto-load history when resuming a session.
+  - [X] **Library Manager UI** (`M-x fuji-manager`):
+    - [X] Columns: `[Icon] [Title] [Memo] [Date] [Size]`.
+    - [X] **Interactive Commands**:
+      - [X] `RET`: Open file side-by-side with restored Chat Session.
+      - [X] `+`: Add New File (call `fuji-read`).
+      - [X] `e`: Edit Title.
+      - [X] `m`: Edit Memo.
+      - [X] `d`: Mark for deletion / `x`: Execute.
+    - [X] Window Behavior: Return to Manager without verify prompts on exit.
+  - [X] **Phase 4.3: Search Functionality**
+    - [X] Finish search functionality refinements (AND logic).
+    - [X] Implement `fuji-library-search` command (Keybinding: `s`).
+    - [X] Metadata Search (`t:title`, `m:memo`, `type:pdf`).
+    - [X] Content Search (Full Text):
+      - [X] Prefer `rg` (ripgrep) for speed.
+      - [X] Fallback to `grep` if `rg` is missing (warn user).
+      - [X] Execution: Synchronous (Simplest implementation).
+    - [X] UI: Filter current view based on search results.
+  - [X] **Integrated Reading Experience**:
+    - [X] **Refactor Progress UI**: Move log messages to Chat Buffer (Top-level Org block/Drawer).
+    - [X] **Window Layout**: Simplify to 2-window layout (Document | Chat).
+    - [X] UI Fix: Ensure cursor automatically moves to `point-max` in chat buffers.
+  - [x] **Phase 4.4: Bug Fixes & Refactoring**:
+    - [x] **Path Portability**: Refactor `archived_path` and `results_dir` to store paths relative to `fuji-cache-directory`.
+    - [x] **Config UX**: Refactor `fuji-configure` to only ask for the *name* of the originals directory (forcing subdirectory of cache root).
+  - [X] **Phase 4.5: Knowledge Base Chat (Multi-doc RAG)**:
+    - [X] **Interactive Command**: `fuji-library-chat-with-group` (Key: `W`).
+    - [X] **Context Strategy**:
+      - [X] Small group (< 5 docs): Inject full markdown context + RAG.
+      - [X] Large group (> 5 docs): RAG-only mode (System prompt instruction + Graphlit ID filtering).
+    - [X] **MCP Update**: Allow `query_graphlit` to accept a list of content IDs for scoped search.
+    - [X] **UI**: Standalone Chat Buffer (`*Fuji-Group-Chat*`) without specific document window.
+
+- [ ] 5. Command & Namespace Refactoring
   - [ ] Rename package commands to better reflect the "Library" concept (e.g., `fuji-read`, `fuji-manager`).
   - [ ] Consolidate command names to be more intuitive for the new workflow.
-- [ ] 9. (Optional/Ambitious) Bibliography & Research Notes
+- [ ] 6. (Optional/Ambitious) Bibliography & Research Notes
   - [ ] DOI support: Auto-fetch metadata from CrossRef/OpenAlex.
   - [ ] Basic `org-ref` compatibility for looking up papers in the library.
 

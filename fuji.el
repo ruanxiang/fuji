@@ -901,22 +901,30 @@ Prompts for content deletion and kills related buffers."
   (interactive)
   (let ((chat-buf (current-buffer))
         (pdf-buf fuji--pdf-buffer)
-        (prog-buf fuji--prog-buffer))
-    (unless (and fuji--filename (string-match-p "\\*Fuji-Chat:" (buffer-name chat-buf)))
-      (user-error "Fuji: Not in a Fuji-Chat buffer"))
+        (prog-buf fuji--prog-buffer)
+        (is-group-chat (string-prefix-p "*Fuji-Group-Chat" (buffer-name))))
+    (unless (or (and fuji--filename (string-match-p "\\*Fuji-Chat:" (buffer-name chat-buf)))
+                is-group-chat)
+      (user-error "Fuji: Not in a Fuji-Chat or Group-Chat buffer"))
     
     ;; 1. Run cleanup (asks about Graphlit deletion)
     (fuji--cleanup-session)
     
     ;; 2. Remove the hook to prevent duplicate cleanup when killing buffer
     (remove-hook 'kill-buffer-hook #'fuji--cleanup-session t)
+
+    ;; 3. Restore Library Manager FIRST (to fix window layout)
+    (let ((manager-buf (get-buffer "*Fuji-Library*")))
+      (when (buffer-live-p manager-buf)
+        (switch-to-buffer manager-buf)
+        (delete-other-windows)))
     
-    ;; 3. Kill buffers
+    ;; 4. Kill buffers (in background)
     (when (buffer-live-p pdf-buf) (kill-buffer pdf-buf))
     (when (buffer-live-p prog-buf) (kill-buffer prog-buf))
     (kill-buffer chat-buf)
     
-    (message "Fuji: Session ended and buffers cleaned up.")))
+    (message "Fuji: Session ended.")))
 
 (defun fuji--delete-from-graphlit (content-id)
   "Delete CONTENT-ID from Graphlit via MCP."
@@ -957,12 +965,15 @@ Prompts for content deletion and kills related buffers."
   "Search the research paper for specific details using Graphlit RAG.
 This is used as a gptel tool in hybrid mode."
   (let* ((conn (fuji--get-mcp-connection))
-         (content-id fuji--content-id))
-    (unless content-id
-      (error "Fuji: Content ID not found in current buffer"))
+         (ids (cond 
+               ((bound-and-true-p fuji--content-ids) (vconcat fuji--content-ids))
+               ((bound-and-true-p fuji--content-id) (vector fuji--content-id))
+               (t nil))))
+    (unless (and ids (> (length ids) 0))
+      (error "Fuji: No content context found in current buffer"))
     (let ((result (mcp-call-tool conn "promptConversation"
                                  `((prompt . ,query)
-                                   (contentIds . [,content-id])))))
+                                   (contentIds . ,ids)))))
       (fuji--mcp-parse-result result))))
 
 (defvar fuji-gptel-tool-graphlit
@@ -1038,27 +1049,84 @@ This is used as a gptel tool in hybrid mode."
   "List of content items from Graphlit.
 Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 
-(defvar fuji-library-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "g") 'fuji-library-refresh)
-    (define-key map (kbd "d") 'fuji-library-mark-delete)
-    (define-key map (kbd "u") 'fuji-library-unmark)
-    (define-key map (kbd "U") 'fuji-library-unmark-all)
-    (define-key map (kbd "x") 'fuji-library-execute)
-    (define-key map (kbd "RET") 'fuji-library-view-details)
-    (define-key map (kbd "q") #'quit-window)
-    map)
+
+(defun fuji-library-add-file ()
+  "Add a new file to the library using `fuji-read`."
+  (interactive)
+  (fuji-read)
+  ;; Refresh happens implicitly if fuji-read succeeds and user switches back, 
+  ;; but we can force refresh if we are already in the library buffer
+  (when (derived-mode-p 'fuji-library-mode)
+    (fuji-library-refresh)))
+
+(defun fuji-library-edit-title ()
+  "Edit the title of the current entry."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (metadata (fuji--get-metadata-for-id id))
+         (current-title (or (cdr (assoc 'title metadata)) (cdr (assoc 'filename metadata)) ""))
+         (new-title (read-string "Edit Title: " current-title)))
+    (when (not (string-equal current-title new-title))
+      (let ((entries (fuji--load-metadata-cache)))
+        ;; Update metadata cache
+        (setf (alist-get 'title (cdr (assoc (if (stringp id) (intern id) id) entries))) new-title)
+        (fuji--save-metadata-cache entries)
+        (message "Fuji: Title updated."))
+      (fuji-library-refresh))))
+
+(defun fuji-library-edit-memo ()
+  "Edit the memo of the current entry."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (metadata (fuji--get-metadata-for-id id))
+         (current-memo (or (cdr (assoc 'memo metadata)) ""))
+         (new-memo (read-string "Edit Memo: " current-memo)))
+    (when (not (string-equal current-memo new-memo))
+      (let ((entries (fuji--load-metadata-cache)))
+        ;; Update metadata cache
+        (setf (alist-get 'memo (cdr (assoc (if (stringp id) (intern id) id) entries))) new-memo)
+        (fuji--save-metadata-cache entries)
+        (message "Fuji: Memo updated."))
+      (fuji-library-refresh))))
+
+(defun fuji-library-open-session ()
+  "Open or resume session for the current entry."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (if id
+        (fuji--load-session id)
+      (message "Fuji: No entry selected."))))
+
+(defvar fuji-library-mode-map (make-sparse-keymap)
   "Keymap for `fuji-library-mode'.")
+
+(define-key fuji-library-mode-map (kbd "g") 'fuji-library-refresh)
+(define-key fuji-library-mode-map (kbd "d") 'fuji-library-mark-delete)
+(define-key fuji-library-mode-map (kbd "u") 'fuji-library-unmark)
+(define-key fuji-library-mode-map (kbd "U") 'fuji-library-unmark-all)
+(define-key fuji-library-mode-map (kbd "W") 'fuji-library-chat-with-group)
+(define-key fuji-library-mode-map (kbd "x") 'fuji-library-execute)
+(define-key fuji-library-mode-map (kbd "RET") 'fuji-library-open-session)
+(define-key fuji-library-mode-map (kbd "+") 'fuji-library-add-file)
+(define-key fuji-library-mode-map (kbd "a") 'fuji-library-add-file)
+(define-key fuji-library-mode-map (kbd "e") 'fuji-library-edit-title)
+(define-key fuji-library-mode-map (kbd "m") 'fuji-library-edit-memo)
+(define-key fuji-library-mode-map (kbd "s") #'fuji-library-search)
+(define-key fuji-library-mode-map (kbd "/") #'fuji-library-clear-search)
+(define-key fuji-library-mode-map (kbd "S") #'fuji-library-clear-search)
+(define-key fuji-library-mode-map (kbd "q") #'quit-window)
 
 (define-derived-mode fuji-library-mode tabulated-list-mode "Fuji-Library"
   "Major mode for managing Graphlit content.
 \\{fuji-library-mode-map}"
   (setq tabulated-list-format
-        [("Title" 40 t)
+        [("I" 3 nil)  ; Icon
+         ("Title" 40 t)
+         ("Memo" 30 nil)
          ("ID" 12 nil)
          ("Date" 12 t)
          ("Size" 10 t)
-         ("Type" 20 t)])
+         ("Type" 10 t)])
   (setq tabulated-list-padding 2)
   (setq tabulated-list-sort-key (cons "Date" t))
   (tabulated-list-init-header))
@@ -1126,6 +1194,97 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
       (error
        (message "Fuji: Failed to save metadata cache: %s" (error-message-string err))))))
 
+(defun fuji--format-file-size (bytes)
+  "Format BYTES as human-readable file size."
+  (cond
+   ((>= bytes 1073741824) (format "%.1f GB" (/ bytes 1073741824.0)))
+   ((>= bytes 1048576) (format "%.1f MB" (/ bytes 1048576.0)))
+   ((>= bytes 1024) (format "%.1f KB" (/ bytes 1024.0)))
+   (t (format "%d B" bytes))))
+
+(defun fuji--format-date (iso-date)
+  "Format ISO-DATE string to readable format."
+  (if (stringp iso-date)
+      (substring iso-date 0 10)  ; Extract YYYY-MM-DD
+    "N/A"))
+
+(defun fuji-library-refresh ()
+  "Refresh the content list from the active RAG backend."
+  (interactive)
+  (message "Fuji: Querying %s..." fuji-rag-backend)
+  ;; Use unified RAG API instead of Graphlit-specific call
+  (fuji--rag-list
+   (lambda (contents)
+     (setq fuji--content-list contents)
+     (let ((buf (get-buffer "*Fuji-Library*")))
+       (when (buffer-live-p buf)
+         (with-current-buffer buf
+           (fuji-library--populate-buffer))))
+     (message "Fuji: Refreshed (%d items)" (length contents)))))
+
+
+(defun fuji-library--populate-buffer (&optional content-list)
+  "Populate the library buffer with CONTENT-LIST or fuji--content-list."
+  (let ((entries
+         (mapcar
+          (lambda (item)
+            (let* ((id (cdr (assoc 'id item)))
+                   (metadata (fuji--get-metadata-for-id id))
+                   ;; Use cached metadata if available
+                   (name (if metadata
+                             (or (cdr (assoc 'title metadata)) (cdr (assoc 'filename metadata)))
+                           (format "Content %s" (substring id 0 8))))
+                   (memo (or (and metadata (cdr (assoc 'memo metadata))) ""))
+                   (date (if metadata
+                             (let ((upload-date (cdr (assoc 'upload_date metadata))))
+                               (if (stringp upload-date)
+                                   (substring upload-date 0 10)  ; Extract YYYY-MM-DD
+                                 "N/A"))
+                           "N/A"))
+                   (size (if metadata
+                             (fuji--format-file-size (cdr (assoc 'file_size metadata)))
+                           "N/A"))
+                   ;; Use doc_type from metadata for display, fallback to mimeType if missing
+                   (display-type (if metadata
+                                     (or (cdr (assoc 'doc_type metadata)) "unknown")
+                                   (or (cdr (assoc 'mimeType item)) "unknown")))
+                   (id-short (substring id 0 (min 8 (length id))))
+                   (icon (cond
+                          ((string-match-p "pdf" display-type)
+                           (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-file_pdf_o" :face '(:foreground "red")) "P"))
+                          ((string-match-p "word\\|docx?" display-type)
+                           (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-file_word_o" :face '(:foreground "blue")) "W"))
+                          ((string-match-p "html?" display-type)
+                           (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-html5" :face '(:foreground "orange")) "H"))
+                          ((string-match-p "epub" display-type)
+                           (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-book" :face '(:foreground "green")) "E"))
+                          (t (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-file_o") "?")))))
+              ;; Ensure vector has exactly 7 elements to match tabulated-list-format
+              (list id (vector icon name memo id-short date size display-type))))
+          (or content-list fuji--content-list))))
+    (setq tabulated-list-entries entries)
+    (tabulated-list-init-header)
+    (tabulated-list-print t)))
+
+(defun fuji-library-mark-delete ()
+  "Mark the current entry for deletion."
+  (interactive)
+  (tabulated-list-put-tag "D" t))
+
+(defun fuji-library-unmark ()
+  "Unmark the current entry."
+  (interactive)
+  (tabulated-list-put-tag " " t))
+
+(defun fuji-library-unmark-all ()
+  "Unmark all entries."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (while (re-search-forward tabulated-list-tag-regexp nil t)
+      (replace-match " " nil nil nil 1)))
+  (tabulated-list-print t))
+
 ;;; Phase 2.2: File Archiving Functions
 
 (defun fuji--get-originals-dir ()
@@ -1169,7 +1328,13 @@ Returns (path . type) where type is 'original, 'archived, or 'markdown.
 Signals an error if no file can be found."
   (let* ((metadata (fuji--get-metadata-for-id content-id))
          (original-path (cdr (assoc 'original_path metadata)))
-         (archived-path (cdr (assoc 'archived_path metadata)))
+         (raw-archived-path (or (cdr (assoc 'archived_path metadata))
+                                (cdr (assoc 'archived-path metadata))))
+         (archived-path (if (and raw-archived-path 
+                                 (not (file-name-absolute-p raw-archived-path))
+                                 (bound-and-true-p fuji-cache-directory))
+                            (expand-file-name raw-archived-path fuji-cache-directory)
+                          raw-archived-path))
          (results-dir (cdr (assoc 'results_dir metadata))))
     (cond
      ;; Original file exists
@@ -1190,7 +1355,134 @@ Signals an error if no file can be found."
       (error "Cannot locate file for content ID: %s" content-id)))))
 
 
+
+(defcustom fuji-sessions-directory nil
+  "Directory to store persistent chat sessions.
+If nil, defaults to `sessions/` inside `fuji-cache-directory`."
+  :type '(choice (const :tag "Default" nil)
+                 directory)
+  :group 'fuji)
+
+(defun fuji--get-sessions-dir ()
+  "Get the sessions archive directory path.
+Creates the directory if it doesn't exist."
+  (let ((dir (or fuji-sessions-directory
+                 (expand-file-name "sessions/" fuji-cache-directory))))
+    (unless (file-directory-p dir)
+      (make-directory dir t))
+    dir))
+
+(defun fuji--get-session-file (content-id)
+  "Get the path to the saved session file for CONTENT-ID."
+  (expand-file-name (format "%s.org" content-id)
+                    (fuji--get-sessions-dir)))
+
+(defun fuji--save-session ()
+  "Save the current chat buffer content to a session file."
+  (interactive)
+  (when (and fuji--content-id (buffer-live-p (current-buffer)))
+    (let ((file (fuji--get-session-file fuji--content-id))
+          (content (buffer-string)))
+      (with-temp-file file
+        (insert content))
+      (fuji--log "Session saved to %s" file))))
+
+
+(defun fuji--setup-2-buffer-layout (left-buf right-buf)
+  "Setup a 2-column layout with LEFT-BUF and RIGHT-BUF."
+  (delete-other-windows)
+  (switch-to-buffer left-buf)
+  (let ((right-win (split-window-right)))
+    (set-window-buffer right-win right-buf)
+    ;; Enhance UX: ensure right window is focused for chatting
+    (select-window right-win)))
+
+(defun fuji--load-session (content-id)
+  "Restore reading session for CONTENT-ID."
+  (let* ((metadata (fuji--get-metadata-for-id content-id))
+         (filename (or (cdr (assoc 'filename metadata)) "Unknown"))
+         (original (cdr (assoc 'original_path metadata)))
+         (archived (cdr (assoc 'archived_path metadata)))
+         (results (cdr (assoc 'results_dir metadata)))
+         ;; Prefer original if available, else archived
+         (doc-path (if (and original (file-exists-p original)) original archived))
+         (session-file (fuji--get-session-file content-id))
+         (session-content (when (file-exists-p session-file)
+                            (with-temp-buffer
+                              (insert-file-contents session-file)
+                              (buffer-string)))))
+    
+    (unless (and doc-path (file-exists-p doc-path))
+      (error "Document file not found for %s (Original: %s, Archived: %s)" 
+             filename original archived))
+
+    ;; Open Document
+    (let ((doc-buffer (find-file-noselect doc-path))
+          (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename))))
+      
+      ;; Setup Layout (2-window)
+      (fuji--setup-2-buffer-layout doc-buffer chat-buffer)
+
+      ;; Init Chat Buffer
+      (with-current-buffer chat-buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (org-mode)
+          
+          ;; 1. Restore Content
+          (if session-content
+              (insert session-content)
+            ;; Default Header if no session
+            (insert "#+TITLE: Chat Session: " filename "\n"
+                    "#+STARTUP: indent\n"
+                    "#+PROPERTY: header-args :results silent\n\n"
+                    "* Session Started: " (format-time-string "[%Y-%m-%d %H:%M]") "\n\n"))
+          
+          ;; 2. Set Local Variables
+          (setq-local fuji--content-id content-id)
+          (setq-local fuji--filename filename)
+          (setq-local fuji--results-dir results)
+          (setq-local fuji--pdf-buffer doc-buffer)
+          ;; Note: fuji--prog-buffer is deprecated in Phase 4 UI
+
+          ;; 2.5 Ensure Clean Context
+          (when (fboundp 'gptel-context-remove-all)
+            (gptel-context-remove-all))
+
+          ;; 3. Context Injection (Hybrid Mode)
+          (when (and results (file-exists-p (expand-file-name (concat (file-name-base filename) ".md") results)))
+             (let ((md-file (expand-file-name (concat (file-name-base filename) ".md") results)))
+               (when (fboundp 'gptel-add-file)
+                 (let ((inhibit-message t))
+                   (gptel-add-file md-file)))))
+
+          ;; 4. GPTel & Graphlit Config
+          (when fuji-gptel-backend
+            (let ((be (gptel-get-backend fuji-gptel-backend)))
+              (when be (setq-local gptel-backend be))))
+          (when fuji-gptel-model
+            (setq-local gptel-model fuji-gptel-model))
+
+          (setq-local gptel-directives 
+                      (cons '(fuji . "You are an academic assistant by Ruan. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
+                            gptel-directives))
+          (setq-local gptel-default-directive 'fuji)
+
+          (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+            (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
+
+          ;; 5. Enable Modes & Hooks
+          (gptel-mode)
+          (fuji-mode 1)
+          ;; Auto-save hooks
+          (add-hook 'kill-buffer-hook #'fuji--save-session nil t)
+          (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
+          
+          (goto-char (point-max))
+          (message "Fuji: Session loaded for %s" filename))))))
+
 (defun fuji--add-metadata-entry (content-id filename file-path &optional results-dir)
+
   "Add metadata entry for CONTENT-ID with FILENAME and FILE-PATH.
 Automatically archives the original file and tracks document type.
 If RESULTS-DIR is provided, it is stored to allow deleting extracted content later."
@@ -1205,14 +1497,25 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
                     ((string-match-p "\\.epub$" file-path) "epub")
                     ((string-match-p "\\.html?$" file-path) "html")
                     (t "unknown")))
-         ;; Archive the original file
+         ;; Calculate hash and archive
+         ;; Re-calculate hash here to ensure it's stored in metadata even if already archived
+         (file-hash (if (file-exists-p file-path)
+                        (secure-hash 'sha256 file-path)
+                      nil))
          (archived-path (fuji--archive-file file-path))
          (metadata `((filename . ,filename)
+                     (title . ,filename)          ; NEW: Adjustable title, defaults to filename
+                     (memo . "")                  ; NEW: User notes
+                     (file_hash . ,file-hash)     ; NEW: For duplicate detection
                      (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
                      (file_size . ,(or file-size 0))
                      (original_path . ,file-path)
-                     (archived_path . ,archived-path)
-                     (results_dir . ,results-dir)   ; NEW: Track results directory
+                     (archived_path . ,(if archived-path 
+                                           (file-relative-name archived-path fuji-cache-directory) 
+                                         nil))
+                     (results_dir . ,(if results-dir
+                                         (file-relative-name results-dir fuji-cache-directory)
+                                       nil))
                      (doc_type . ,doc-type))))
     ;; Add or update entry
     (setq cache (cons (cons id-key metadata)
@@ -1236,6 +1539,16 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
     (fuji--save-metadata-cache updated-cache)
     (message "Fuji: Removed metadata for %s" content-id)))
 
+(defun fuji--update-metadata-entry (content-id new-metadata)
+  "Update metadata entry for CONTENT-ID with NEW-METADATA."
+  (let* ((cache (fuji--load-metadata-cache))
+         (id-key (if (stringp content-id) (intern content-id) content-id))
+         ;; Remove old entry
+         (clean-cache (assoc-delete-all id-key cache))
+         ;; Add new entry
+         (updated-cache (cons (cons id-key new-metadata) clean-cache)))
+    (fuji--save-metadata-cache updated-cache)))
+
 
 (defun fuji--format-file-size (bytes)
   "Format BYTES as human-readable file size."
@@ -1251,53 +1564,289 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
       (substring iso-date 0 10)  ; Extract YYYY-MM-DD
     "N/A"))
 
-(defun fuji-library-refresh ()
-  "Refresh the content list from the active RAG backend."
+
+
+(defun fuji-library-open-session ()
+  "Resume reading session for the selected document."
   (interactive)
-  (message "Fuji: Querying %s..." fuji-rag-backend)
-  ;; Use unified RAG API instead of Graphlit-specific call
-  (fuji--rag-list
-   (lambda (contents)
-     (setq fuji--content-list contents)
-     (let ((buf (get-buffer "*Fuji-Library*")))
-       (when (buffer-live-p buf)
-         (with-current-buffer buf
-           (fuji-library--populate-buffer))))
-     (message "Fuji: Refreshed (%d items)" (length contents)))))
+  (let ((id (tabulated-list-get-id)))
+    (if id
+        (fuji--load-session id)
+      (user-error "No document selected"))))
 
 
-(defun fuji-library--populate-buffer ()
-  "Populate the library buffer with content list."
-  (let ((entries
-         (mapcar
-          (lambda (item)
-            (let* ((id (cdr (assoc 'id item)))
-                   (metadata (fuji--get-metadata-for-id id))
-                   ;; Use cached metadata if available
-                   (name (if metadata
-                             (cdr (assoc 'filename metadata))
-                           (format "Content %s" (substring id 0 8))))
-                   (date (if metadata
-                             (let ((upload-date (cdr (assoc 'upload_date metadata))))
-                               (if (stringp upload-date)
-                                   (substring upload-date 0 10)  ; Extract YYYY-MM-DD
-                                 ("N/A")))
-                           "N/A"))
-                   (size (if metadata
-                             (fuji--format-file-size (cdr (assoc 'file_size metadata)))
-                           "N/A"))
-                   (mime (or (cdr (assoc 'mimeType item)) "unknown"))
-                   (id-short (substring id 0 (min 8 (length id)))))
-              (list id (vector name id-short date size mime))))
-          fuji--content-list)))
-    (setq tabulated-list-entries entries)
-    (tabulated-list-init-header)
-    (tabulated-list-print t)))
+(defun fuji-library-edit-title ()
+  "Edit the title of the selected document."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (current-row (and id (assoc id tabulated-list-entries)))
+         ;; Title is now at index 1 because index 0 is Icon
+         (current-title (and current-row (aref (cadr current-row) 1))))
+    (if id
+        (let ((new-title (read-string "New Title: " current-title)))
+          (when (and new-title (not (string-empty-p new-title)))
+            ;; Update Metadata Cache
+            (let ((metadata (fuji--get-metadata-for-id id)))
+              (when metadata
+                (setf (cdr (assoc 'title metadata)) new-title)
+                (fuji--update-metadata-entry id metadata)
+                ;; Update RAG backend if possible (optional, maybe just local cache for now)
+                ;; (fuji--rag-update-title id new-title)
+                (message "Fuji: Title updated to '%s'" new-title)
+                ;; Refresh current line
+                (fuji-library-refresh-current-line)))))
+      (user-error "No document selected"))))
+
+(defun fuji-library-edit-memo ()
+  "Add or edit a memo for the selected document."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (metadata (and id (fuji--get-metadata-for-id id)))
+         (current-memo (and metadata (or (cdr (assoc 'memo metadata)) ""))))
+    (if id
+        (let ((new-memo (read-string "Memo: " current-memo)))
+          (when new-memo
+            (if (assoc 'memo metadata)
+                (setf (cdr (assoc 'memo metadata)) new-memo)
+              (nconc metadata (list (cons 'memo new-memo))))
+            (fuji--update-metadata-entry id metadata)
+            (message "Fuji: Memo updated")
+            (fuji-library-refresh-current-line)))
+      (user-error "No document selected"))))
+
+(defun fuji-library-add-file ()
+  "Add a new file to the library (wrapper for `fuji-read`)."
+  (interactive)
+  (fuji-read))
+
+(defun fuji-library-refresh-current-line ()
+  "Refresh the current line in the library view."
+  (let ((id (tabulated-list-get-id)))
+    (when id
+      ;; Update the entry in fuji--content-list is not strictly needed if we pull from metadata
+      ;; But populate-buffer uses fuji--content-list + fuji--get-metadata-for-id
+      ;; So ensuring metadata is updated is key.
+      (save-excursion
+        (fuji-library--populate-buffer)
+        ;; Restore point? populate-buffer resets everything.
+        ;; This is a simple implementation: full refresh from local list
+        )
+      (fuji-library--restore-point id))))
+
+(defun fuji-library--restore-point (id)
+  "Restore point to the entry with ID."
+  (goto-char (point-min))
+  (while (and (not (eobp))
+              (not (string= (tabulated-list-get-id) id)))
+    (forward-line 1)))
+
+(defun fuji-library-search (query)
+  "Filter the library buffer by QUERY.
+Supports multiple space-separated terms with AND logic.
+Prefixes:
+- t:TITLE (metadata title)
+- m:MEMO (metadata memo)
+- type:TYPE (metadata file type)
+- No prefix: Full-text content search
+
+Example: 'type:pdf t:transformer attention' matches items that are PDFs AND have 'transformer' in title AND 'attention' in content."
+  (interactive "sSearch (t:Title m:Memo type:PDF content): ")
+  (if (string-blank-p query)
+      (fuji-library-clear-search)
+    (let* ((tokens (split-string query " " t))
+           (meta-filters '())
+           (content-terms '())
+           (filtered-entries fuji--content-list))
+
+      ;; 1. Parse tokens
+      (dolist (token tokens)
+        (cond
+         ((string-prefix-p "t:" token) (push (cons 'title (substring token 2)) meta-filters))
+         ((string-prefix-p "m:" token) (push (cons 'memo (substring token 2)) meta-filters))
+         ((string-prefix-p "type:" token) (push (cons 'doc_type (substring token 5)) meta-filters))
+         (t (push token content-terms))))
+
+      ;; 2. Apply metadata filters (Incremental AND)
+      (dolist (filter meta-filters)
+        (let ((field (car filter))
+              (pattern (regexp-quote (cdr filter))))
+          (setq filtered-entries
+                (seq-filter
+                 (lambda (entry)
+                   (let* ((id (cdr (assoc 'id entry)))
+                          (metadata (fuji--get-metadata-for-id id))
+                          (val (or (cdr (assoc field metadata)) "")))
+                     (string-match-p pattern val)))
+                 filtered-entries))))
+
+      ;; 3. Apply content terms (Incremental AND)
+      (when (and filtered-entries content-terms)
+        (let* ((results-base-dir fuji-cache-directory)
+               (originals-name (if (bound-and-true-p fuji-originals-archive-dir)
+                                   (file-name-nondirectory (directory-file-name fuji-originals-archive-dir))
+                                 "originals")))
+          (dolist (term content-terms)
+            (when filtered-entries
+              (let* ((grep-command
+                      (if (executable-find "rg")
+                          (format "rg -l -i '%s' '%s' --glob '!metadata' --glob '!sessions' --glob '!%s'"
+                                  term results-base-dir originals-name)
+                        (format "grep -r -l -i '%s' '%s' --exclude-dir=metadata --exclude-dir=sessions --exclude-dir='%s' --include='*.md'"
+                                term results-base-dir originals-name)))
+                     (matching-files (split-string (shell-command-to-string grep-command) "\n" t))
+                     (matching-ids '()))
+                
+                ;; Map files to IDs
+                (dolist (file matching-files)
+                  (dolist (item fuji--content-list)
+                    (let* ((id (cdr (assoc 'id item)))
+                           (metadata (fuji--get-metadata-for-id id))
+                           (raw-res-dir (cdr (assoc 'results_dir metadata)))
+                           (res-dir (if (and raw-res-dir 
+                                             (not (file-name-absolute-p raw-res-dir))
+                                             (bound-and-true-p fuji-cache-directory))
+                                        (expand-file-name raw-res-dir fuji-cache-directory)
+                                      raw-res-dir)))
+                      (when (and res-dir
+                                 (string-prefix-p (expand-file-name res-dir) (expand-file-name file)))
+                        (push id matching-ids)))))
+                
+                ;; Filter currently candidates by those matching this term
+                (setq filtered-entries
+                      (seq-filter
+                       (lambda (entry)
+                         (member (cdr (assoc 'id entry)) matching-ids))
+                       filtered-entries)))))))
+
+      ;; 4. Update Buffer
+      (fuji-library--populate-buffer filtered-entries)
+      (message "Fuji: Found %d matches for '%s'" (length filtered-entries) query))))
+
+(defun fuji-library-clear-search ()
+  "Clear active search and show all items."
+  (interactive)
+  (fuji-library-refresh)
+  (message "Fuji: Search cleared"))
+
+(defun fuji-library-view-details ()
+  "View detailed information about the current entry."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (item (cl-find id fuji--content-list 
+                        :key (lambda (x) (cdr (assoc 'id x)))
+                        :test #'string=)))
+    (if item
+        (let ((details (format "Content Details\n%s\n\nID: %s\nName: %s\nCreated: %s\nSize: %s\nState: %s\nType: %s"
+                               (make-string 60 ?=)
+                               (cdr (assoc 'id item))
+                               (cdr (assoc 'name item))
+                               (cdr (assoc 'createdDate item))
+                               (fuji--format-file-size (or (cdr (assoc 'fileSize item)) 0))
+                               (cdr (assoc 'state item))
+                               (cdr (assoc '__typename item)))))
+          (with-current-buffer (get-buffer-create "*Fuji-Content-Details*")
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert details)
+              (goto-char (point-min))
+              (view-mode))
+            (display-buffer (current-buffer))))
+      (message "No details available"))))
+
 
 (defun fuji-library-mark-delete ()
   "Mark the current entry for deletion."
   (interactive)
   (tabulated-list-put-tag "D" t))
+
+(defun fuji-library-chat-with-group ()
+  "Start a chat session with ALL currently visible documents in the library.
+Useful for Knowledge Base Chat (Multi-doc RAG).
+
+Context Strategy:
+- < 5 docs: Full context injection + RAG
+- > 5 docs: RAG-only mode (Metadata + System Prompt)"
+  (interactive)
+  ;; 1. Collect visible entries
+  ;; tabulated-list-entries is a list of (ID . VECTOR)
+  (let* ((entries (mapcar #'car tabulated-list-entries)) ; IDs
+         (count (length entries))
+         (content-ids '())
+         (files '()))
+    
+    (when (zerop count)
+      (user-error "Current view is empty."))
+    
+    ;; 2. Gather metadata
+    (dolist (id entries)
+      (let* ((metadata (fuji--get-metadata-for-id id))
+             (res-dir (cdr (assoc 'results_dir metadata)))
+             (filename (cdr (assoc 'filename metadata))))
+        (push id content-ids)
+        (when (and res-dir filename)
+           (let ((md-file (expand-file-name (concat (file-name-base filename) ".md") 
+                                            (if (file-name-absolute-p res-dir) res-dir 
+                                              (expand-file-name res-dir fuji-cache-directory)))))
+             (when (file-exists-p md-file)
+               (push (cons filename md-file) files))))))
+    
+    ;; 3. Create Chat Buffer
+    (let ((buffer-name (format "*Fuji-Group-Chat: %d docs*" count)))
+      (switch-to-buffer (get-buffer-create buffer-name))
+      (delete-other-windows) ;; Full screen
+      
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (org-mode)
+        (fuji-mode)
+        (gptel-mode 1) ;; Enable GPTel interaction
+        
+        ;; 4. Initialize Context
+        (when (fboundp 'gptel-context-remove-all)
+          (gptel-context-remove-all))
+        
+        ;; 5. Smart Context Strategy
+        (insert "#+TITLE: Knowledge Base Chat\n")
+        (insert (format "* Checking %d documents...\n" count))
+        
+        (if (<= count 5)
+            ;; Small Group: Inject All
+            (progn
+              (insert "Mode: Full Context + RAG\n\n")
+              (dolist (f files)
+                (when (fboundp 'gptel-add-file)
+                  (let ((inhibit-message t))
+                    (gptel-add-file (cdr f))))
+                (insert (format "- Imported: %s\n" (car f)))))
+          ;; Large Group: RAG Only
+          (insert "Mode: RAG Only (Too many documents for full context)\n")
+          (insert "System is aware of these documents via Graphlit:\n")
+          (dolist (id content-ids)
+             (insert (format "- ID: %s\n" id))))
+        
+        (insert "\n---\n\n")
+        
+        ;; 6. Setup Local Variables
+        (setq-local fuji--content-ids (nreverse content-ids)) ;; Store LIST
+        
+        ;; 7. GPTel Config
+         (when fuji-gptel-backend
+            (let ((be (gptel-get-backend fuji-gptel-backend)))
+              (when be (setq-local gptel-backend be))))
+          (when fuji-gptel-model
+            (setq-local gptel-model fuji-gptel-model))
+
+         (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+            (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
+         
+         (setq-local gptel-directives 
+                      (cons '(fuji-group . "You are a Knowledge Base Assistant. You have access to a specific group of documents. 
+If the user asks about these documents, ALWAYS use the 'query_graphlit' tool to search for answers, as you may not have their full text in context.
+Summarize findings from multiple documents when appropriate.")
+                            gptel-directives))
+          (setq-local gptel-default-directive 'fuji-group)
+        
+        (message "Fuji: Group Chat started with %d documents." count)))))
 
 (defun fuji-library-unmark ()
   "Unmark the current entry."
@@ -1327,13 +1876,16 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
     (if (null marked-ids)
         (message "No items marked for deletion")
       (when (yes-or-no-p (format "Delete %d item(s) from %s? " (length marked-ids) fuji-rag-backend))
-        ;; Use unified RAG API instead of Graphlit-specific call
         (dolist (id marked-ids)
-          ;; 1. Local Cleanup (Original and Extracted Results)
+          ;; 1. Local Cleanup (Original, Extracted Results, and Session)
           (let ((metadata (fuji--get-metadata-for-id id)))
             (when metadata
-              (let ((archived (cdr (assoc 'archived_path metadata)))
-                    (results (cdr (assoc 'results_dir metadata))))
+              (let ((archived (or (cdr (assoc 'archived_path metadata))
+                                  (cdr (assoc 'archived-path metadata))))
+                    (results (cdr (assoc 'results_dir metadata)))
+                    ;; Determine session file path
+                    (session-file (fuji--get-session-file id)))
+                
                 ;; Delete archived file
                 (when (and archived (file-exists-p archived))
                   (condition-case err
@@ -1341,58 +1893,52 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
                         (delete-file archived)
                         (message "Fuji: Deleted archived file %s" archived))
                     (error (message "Fuji: Failed to delete archived file: %s" err))))
+                
                 ;; Delete results directory
                 (when (and results (file-directory-p results))
                   (condition-case err
                       (progn
                         (delete-directory results t)
                         (message "Fuji: Deleted results directory %s" results))
-                    (error (message "Fuji: Failed to delete results directory: %s" err))))))
+                    (error (message "Fuji: Failed to delete results directory: %s" err))))
+                
+                ;; Delete session file
+                (when (and session-file (file-exists-p session-file))
+                  (condition-case err
+                      (progn
+                        (delete-file session-file)
+                        (message "Fuji: Deleted session file %s" session-file))
+                    (error (message "Fuji: Failed to delete session file: %s" err)))))))
+            
             ;; Remove from metadata cache
-            (fuji--remove-metadata-entry id))
-          
-          ;; 2. Remote Deletion (Graphlit)
-          (fuji--rag-delete id (lambda (success)
-                                 (if success
-                                     (message "Fuji: Deleted %s from RAG backend" id)
-                                   (message "Fuji: Failed to delete %s from RAG backend" id)))))
+            (fuji--remove-metadata-entry id)
+            
+            ;; 2. Remote Deletion (Graphlit)
+            (fuji--rag-delete id (lambda (success)
+                                   (if success
+                                       (message "Fuji: Deleted %s from RAG backend" id)
+                                     (message "Fuji: Failed to delete %s from RAG backend" id)))))
         (message "Fuji: Deleting %d items..." (length marked-ids))
         ;; Refresh after a short delay to allow deletions to complete
         (run-with-timer 2 nil #'fuji-library-refresh)))))
-
-(defun fuji-library-view-details ()
-  "View detailed information about the current entry."
-  (interactive)
-  (let* ((id (tabulated-list-get-id))
-         (item (cl-find id fuji--content-list 
-                        :key (lambda (x) (cdr (assoc 'id x)))
-                        :test #'string=)))
-    (if item
-        (let ((details (format "Content Details\n%s\n\nID: %s\nName: %s\nCreated: %s\nSize: %s\nState: %s\nType: %s"
-                               (make-string 60 ?=)
-                               (cdr (assoc 'id item))
-                               (cdr (assoc 'name item))
-                               (cdr (assoc 'createdDate item))
-                               (fuji--format-file-size (or (cdr (assoc 'fileSize item)) 0))
-                               (cdr (assoc 'state item))
-                               (cdr (assoc '__typename item)))))
-          (with-current-buffer (get-buffer-create "*Fuji-Content-Details*")
-            (let ((inhibit-read-only t))
-              (erase-buffer)
-              (insert details)
-              (goto-char (point-min))
-              (view-mode))
-            (display-buffer (current-buffer))))
-      (message "No details available"))))
 
 ;;;###autoload
 (defun fuji-manage-content ()
   "Open the Graphlit content management interface."
   (interactive)
+  (fuji--ensure-config)
   (let ((buf (get-buffer-create "*Fuji-Library*")))
     (with-current-buffer buf
       (fuji-library-mode)
-      (fuji-library-refresh))
+      ;; Ensure MCP is connected if using Graphlit
+      (when (and (eq fuji-rag-backend 'graphlit)
+                 (not (fuji--get-mcp-connection)))
+        (message "Fuji: Connecting to Graphlit MCP server...")
+        (fuji--register-mcp-server))
+      
+      (if (fuji-verify-environment)
+          (fuji-library-refresh)
+        (message "Fuji: Environment check failed. Please run M-x fuji-configure.")))
     (switch-to-buffer buf)))
 
 ;;;; Compatibility Aliases (Deprecated, will be removed in v1.0)
@@ -1429,39 +1975,7 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
 (make-obsolete 'nexus-paper-library-refresh 'fuji-refresh "0.6.0")
 (make-obsolete 'nexus-paper-library-delete-marked 'fuji-delete-marked "0.6.0")
 
-;;; WORKAROUND: fuji--query-all-contents definition
-;; This function fails to load from its original location (line ~1182)
-;; Adding it here at the end of the file as a workaround
-(defun fuji--query-all-contents (callback)
-  "Query all content from Graphlit via MCP and call CALLBACK with results."
-  (let ((conn (fuji--get-mcp-connection)))
-    (when conn
-      (condition-case outer-err
-          (mcp-async-call-tool conn "queryContents"
-                               '()  ; No arguments needed for listing all
-                               (lambda (result)
-                                 ;; queryContents returns multiple text items, each is a separate content object
-                                 (let* ((content-array (plist-get result :content))
-                                        (contents
-                                         (when (vectorp content-array)
-                                           (cl-loop for item across content-array
-                                                    for text = (plist-get item :text)
-                                                    when (and text (stringp text))
-                                                    collect (condition-case nil
-                                                                (let ((json-object-type 'alist))
-                                                                  (json-read-from-string text))
-                                                              (error nil))))))
-                                   (if contents
-                                       (funcall callback contents)
-                                     (message "Fuji: No content found in Graphlit")
-                                     (funcall callback nil))))
-                               (lambda (inner-err)
-                                 (message "Fuji: Failed to query contents: %s" 
-                                          (error-message-string inner-err))
-                                 (funcall callback nil)))
-        (error
-         (message "Fuji: Query error: %s" (error-message-string outer-err))
-         (funcall callback nil))))))
+
 
 ;;; Session-Specific Plugin Switching
 
@@ -1493,7 +2007,23 @@ BACKEND-NAME should be a registered backend or empty to clear override."
     (setq-local fuji--session-rag-backend backend-name)
     (message "Fuji: Session RAG backend set to '%s'" backend-name)))
 
-(provide 'fuji)
+(defun fuji--extract-pdf-text (pdf-file output-dir callback)
+  "Extract PDF-FILE text using pdftotext (plugin wrapper).
+Calls CALLBACK with the resulting markdown file."
+  (let ((md-file (fuji--pdftotext-extract pdf-file output-dir)))
+    (if md-file
+        (funcall callback md-file)
+      (error "pdftotext extraction failed"))))
+
+(defun fuji--extract-binary-pandoc (doc-file output-dir callback)
+  "Extract DOC-FILE using Pandoc (plugin wrapper).
+Calls CALLBACK with the resulting markdown file."
+  (let ((md-file (fuji--pandoc-extract doc-file output-dir)))
+    (if md-file
+        (funcall callback md-file)
+      (error "Pandoc extraction failed"))))
+
+
 
 ;;;###autoload
 (defun fuji-read ()
@@ -1523,213 +2053,179 @@ Choose extraction method:
                          (message "Fuji: Web URL detected. Converting to PDF...")
                          (fuji--web-to-pdf raw-input temporary-file-directory))
                      raw-input))
-         ;; Determine document type: check if plain text first, then by extension
-         (is-plain-text (fuji--is-plain-text-file doc-file))
-         (doc-type (if is-plain-text
-                       "text"
-                     (cond
-                      ((string-match-p "\\.pdf$" doc-file) "pdf")
-                      ((string-match-p "\\.docx$" doc-file) "docx")
-                      ((string-match-p "\\.doc$" doc-file) "doc")
-                      ((string-match-p "\\.xlsx?$" doc-file) "xlsx")
-                      ((string-match-p "\\.pptx?$" doc-file) "pptx")
-                      ((string-match-p "\\.epub$" doc-file) "epub")
-                      ((string-match-p "\\.html?$" doc-file) "html")
-                      (t "binary"))))
-         ;; Use configured LLM tool name from Phase 1 configuration
-         (llm-tool (or fuji-llm-extraction-tool "marker"))
-         ;; Adjust extraction methods based on document type
-         (mode-map (cond
-                    ;; Plain text files: no extraction needed
-                    ((string= doc-type "text")
-                     '(("Direct (no extraction needed)" . direct)))
-                    ;; PDF: offer high quality or fast extraction
-                    ((string= doc-type "pdf")
-                     `((,(format "High Quality (%s) - Better accuracy, supports figures" 
-                                 (capitalize llm-tool)) . llm)
-                       ("Fast (pdftotext) - Quick text-only extraction" . fast)
-                       ("Offline - Use pre-extracted markdown" . offline)))
-                    ;; Other binary formats: use Pandoc
-                    ((member doc-type '("docx" "epub" "html"))
-                     `(("Extract with Pandoc" . fast)
-                       ("Offline - Use pre-extracted markdown" . offline)))
-                    ;; Legacy .doc
-                    ((string= doc-type "doc")
-                     (user-error "Legacy .doc format is not supported. Please convert to .docx or PDF and try again."))
-                    ;; Excel/PowerPoint
-                    ((member doc-type '("xlsx" "pptx"))
-                     (user-error "Spreadsheets/Slides are not supported directly. Please convert to .docx or PDF and try again."))
-                    ;; Unknown binary format
-                    (t
-                     (error "Unsupported file type: %s (not plain text and no known extractor)" doc-file))))
-         (mode-label (completing-read "Extraction method: " (mapcar #'car mode-map) nil t))
-         (mode (cdr (assoc mode-label mode-map)))
-         (filename (file-name-nondirectory doc-file))
-         (results-dir (fuji--get-cache-path doc-file))
-         (doc-buffer (cond
-                      ;; PDF/Text: Open the file directly
-                      ((or (string= doc-type "pdf") (string= doc-type "text"))
-                       (find-file-noselect doc-file))
-                      ;; Binary (DOCX/EPUB): Create a placeholder view buffer
-                      (t
-                       (let ((buf (get-buffer-create (format "*Fuji View: %s*" filename))))
-                         (with-current-buffer buf
-                           (let ((inhibit-read-only t))
-                             (view-mode 0)
-                             (erase-buffer)
-                             (insert (format "Extracting content from %s...\n\nPreview will appear here shortly." filename))
-                             (view-mode 1)))
-                         buf))))
-         (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename)))
-         (prog-buffer (get-buffer-create fuji-progress-buffer)))
-
-    ;; Initial UI Setup
-    (with-current-buffer prog-buffer
-      (let ((inhibit-read-only t))
-        (set-buffer-multibyte t)
-        (erase-buffer)
-        (insert "Fuji Progress: " filename "\n" (make-string 40 ?-) "\n\n")
-        (setq-local cursor-type nil)
-        (view-mode 1)))
+         ;; HASH CHECK: Check if file already exists in library
+         (file-hash (when (file-exists-p doc-file) (secure-hash 'sha256 doc-file)))
+         (existing-entry (when file-hash
+                           (cl-find-if (lambda (entry) 
+                                         (string= (cdr (assoc 'file_hash (cdr entry))) file-hash))
+                                       (fuji--load-metadata-cache)))))
     
-    (with-current-buffer chat-buffer
-      (let ((inhibit-read-only t))
-        (set-buffer-multibyte t)
-        (erase-buffer)
-        (insert "# Waiting for document ingestion...\n\n")
-        (insert "Progress is being tracked in the right buffer.")))
+    (if (and existing-entry (y-or-n-p (format "File already in library (ID: %s). Resume session? " 
+                                              (car existing-entry))))
+        ;; RESUME EXISTING SESSION
+        (fuji--load-session (car existing-entry))
+      
+      ;; START NEW SESSION
+      (let* ((is-plain-text (fuji--is-plain-text-file doc-file))
+             (doc-type (if is-plain-text
+                           "text"
+                         (cond
+                          ((string-match-p "\\.pdf$" doc-file) "pdf")
+                          ((string-match-p "\\.docx$" doc-file) "docx")
+                          ((string-match-p "\\.doc$" doc-file) "doc")
+                          ((string-match-p "\\.xlsx?$" doc-file) "xlsx")
+                          ((string-match-p "\\.pptx?$" doc-file) "pptx")
+                          ((string-match-p "\\.epub$" doc-file) "epub")
+                          ((string-match-p "\\.html?$" doc-file) "html")
+                          (t "binary"))))
+             (llm-tool (or fuji-llm-extraction-tool "marker"))
+             (mode-map (cond
+                        ((string= doc-type "text")
+                         '(("Direct (no extraction needed)" . direct)))
+                        ((string= doc-type "pdf")
+                         `((,(format "High Quality (%s) - Better accuracy, supports figures" 
+                                     (capitalize llm-tool)) . llm)
+                           ("Fast (pdftotext) - Quick text-only extraction" . fast)
+                           ("Offline - Use pre-extracted markdown" . offline)))
+                        ((member doc-type '("docx" "epub" "html"))
+                         `(("Extract with Pandoc" . fast)
+                           ("Offline - Use pre-extracted markdown" . offline)))
+                        ((string= doc-type "doc")
+                         (user-error "Legacy .doc format is not supported. Please convert to .docx or PDF and try again."))
+                        ((member doc-type '("xlsx" "pptx"))
+                         (user-error "Spreadsheets/Slides are not supported directly. Please convert to .docx or PDF and try again."))
+                        (t
+                         (error "Unsupported file type: %s" doc-file))))
+             (mode-label (completing-read "Extraction method: " (mapcar #'car mode-map) nil t))
+             (mode (cdr (assoc mode-label mode-map)))
+             (filename (file-name-nondirectory doc-file))
+             (results-dir (fuji--get-cache-path doc-file))
+             (doc-buffer (cond
+                          ((or (string= doc-type "pdf") (string= doc-type "text"))
+                           (find-file-noselect doc-file))
+                          (t
+                           (let ((buf (get-buffer-create (format "*Fuji View: %s*" filename))))
+                             (with-current-buffer buf
+                               (let ((inhibit-read-only t))
+                                 (view-mode 0)
+                                 (erase-buffer)
+                                 (insert (format "Extracting content from %s...\n\nPreview will appear here shortly." filename))
+                                 (view-mode 1)))
+                             buf))))
+             (chat-buffer (get-buffer-create (format "*Fuji-Chat: %s*" filename))))
 
-    (fuji--setup-3-buffer-layout doc-buffer chat-buffer prog-buffer)
-    (fuji--log "Workflow started for %s document in mode: %s" doc-type mode)
-
-    (let ((extraction-callback
-           (lambda (md-file)
-             ;; If we used a placeholder buffer, populate it now
-             (unless (or (string= doc-type "pdf") (string= doc-type "text"))
-               (with-current-buffer doc-buffer
-                 (let ((inhibit-read-only t))
-                   (view-mode 0)
-                   (erase-buffer)
-                   (insert-file-contents md-file)
-                   (markdown-mode)
-                   (view-mode 1))))
-             (let* ((md-content (with-temp-buffer
-                                  (insert-file-contents md-file)
-                                  (buffer-string)))
-                    ;; Save metadata for library manager
-                    (metadata `((filename . ,filename)
-                                (pdf-path . ,doc-file)
-                                (results-dir . ,results-dir))))
-               (fuji--rag-ingest
-                md-content filename metadata
-                (lambda (content-id)
-                  (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
-                  ;; Archive the original file and save metadata
-                  (fuji--add-metadata-entry content-id filename doc-file results-dir)
-                  (with-current-buffer chat-buffer
-                    (let ((inhibit-read-only t)) 
-                      (set-buffer-multibyte t)
-                      (erase-buffer)
-                      (org-mode)
-                      
-                      (setq-local fuji--content-id content-id)
-                      (setq-local fuji--filename filename)
-                      (setq-local fuji--results-dir results-dir)
-                      (setq-local fuji--pdf-buffer doc-buffer)
-                      (setq-local fuji--prog-buffer prog-buffer)
-                      
-                      ;; Hybrid mode only (proxy mode disabled)
-                      (let* ((md-file (expand-file-name (concat (file-name-base doc-file) ".md")
-                                                        fuji--results-dir)))
-                        (with-temp-file md-file
-                          (insert md-content))
-                        ;; Add the extracted MD file as context silently
-                        (when (fboundp 'gptel-add-file)
-                          (let ((inhibit-message t))
-                            (gptel-add-file md-file))))
-                      
-                      ;; Apply configured Backend & Model
-                      (when fuji-gptel-backend
-                        (let ((be (gptel-get-backend fuji-gptel-backend)))
-                          (when be (setq-local gptel-backend be))))
-                      (when fuji-gptel-model
-                        (setq-local gptel-model fuji-gptel-model))
-
-                      ;; Configure system directive
-                      (setq-local gptel-directives 
-                                  (cons '(fuji . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
-                                        gptel-directives))
-                      (setq-local gptel-default-directive 'fuji)
-                      
-                      ;; Register Graphlit as a gptel tool if available
-                      (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-                        (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
-                      
-                      (insert "\n* ") ;; Initial user prompt
-                      (gptel-mode)
-                      (fuji-mode 1)
-                      (fuji--setup-buffer-header filename content-id)
-                      (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
-                      (fuji--log "[SUCCESS] Chat initialization complete. Ready!")
-                      (goto-char (point-max))
-                      ;; Auto-focus the chat window
-                      (when-let* ((win (get-buffer-window chat-buffer)))
-                        (select-window win))))))))))
-
-      (pcase mode
-        ('direct
-         (fuji--log "[STEP 1/3] Reading plain text file directly (no extraction needed)...")
-         ;; For plain text files, read content directly and save as markdown
-         (let* ((text-content (with-temp-buffer
-                                (insert-file-contents doc-file)
-                                (buffer-string)))
-                (md-file (expand-file-name (concat (file-name-base doc-file) ".md")
-                                           results-dir)))
-           (unless (file-directory-p results-dir)
-             (make-directory results-dir t))
-           (with-temp-file md-file
-             (insert text-content))
-           (fuji--log "[STEP 2/3] Text file loaded. Ingesting content...")
-           (funcall extraction-callback md-file)))
+        ;; Initial UI Setup (2-Window)
+        (with-current-buffer chat-buffer
+          (let ((inhibit-read-only t))
+            (set-buffer-multibyte t)
+            (erase-buffer)
+            (org-mode)
+            (insert "#+TITLE: Chat Session: " filename "\n\n")
+            (insert "* Fuji System Log\n:PROPERTIES:\n:Created: " (format-time-string "[%Y-%m-%d %H:%M]") "\n:END:\n")
+            (insert "- [ ] Workflow started for " doc-type " document in mode: " (format "%s" mode) "\n")
+            (insert "- [ ] Waiting for document ingestion...\n")))
         
-        ('llm
-         (fuji--log "[STEP 1/3] Starting extraction with %s (async)..." llm-tool)
-         ;; Use configured LLM extractor via unified plugin API (PDF only)
-         (let ((extractor (fuji-get-extractor llm-tool)))
-           (unless extractor
-             (error "Extractor '%s' not found. Please run M-x fuji-configure" llm-tool))
-           (funcall (fuji-extractor-extract-fn extractor)
-                    doc-file results-dir
-                    (lambda (md-file)
-                      (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
-                      (funcall extraction-callback md-file)))))
-        ('fast
-         (if (string= doc-type "pdf")
-             (progn
-               (fuji--log "[STEP 1/3] Using fast text-only extraction (pdftotext)...")
-               ;; Use pdftotext for PDF
-               (let ((md-file (fuji--extract doc-file results-dir "pdftotext")))
-                 (fuji--log "[STEP 2/3] Text extracted. Ingesting content...")
-                 (funcall extraction-callback md-file)))
-           (progn
-             (fuji--log "[STEP 1/3] Extracting %s with Pandoc..." doc-type)
-             ;; Use Pandoc for non-PDF formats
-             (let ((md-file (fuji--extract doc-file results-dir "pandoc")))
-               (fuji--log "[STEP 2/3] Extraction complete. Ingesting content...")
-               (funcall extraction-callback md-file)))))
-        
-        ('offline
-         (let ((local-dir (read-directory-name "Select directory with pre-extracted results: " nil nil t)))
-           (fuji--log "[STEP 1/3] Loading pre-extracted results from: %s" local-dir)
-           (fuji--use-local-marker-result local-dir results-dir)
-           (let ((md-file (fuji--find-marker-output results-dir)))
-             (if md-file
-                 (progn
-                   (fuji--log "[STEP 2/3] Pre-extracted results loaded. Ingesting content...")
-                   (funcall extraction-callback md-file))
-               (error "Fuji: No .md file found in the selected directory!")))))
+        (fuji--setup-2-buffer-layout doc-buffer chat-buffer)
+        (fuji--log "Workflow started for %s document in mode: %s" doc-type mode)
 
-))))
+        (let ((extraction-callback
+               (lambda (md-file)
+                 ;; Update doc buffer for binary files
+                 (unless (or (string= doc-type "pdf") (string= doc-type "text"))
+                   (with-current-buffer doc-buffer
+                     (let ((inhibit-read-only t))
+                       (view-mode 0)
+                       (erase-buffer)
+                       (insert-file-contents md-file)
+                       (markdown-mode)
+                       (view-mode 1))))
+                 (let* ((md-content (with-temp-buffer
+                                      (insert-file-contents md-file)
+                                      (buffer-string)))
+                        (metadata `((filename . ,filename)
+                                    (pdf-path . ,doc-file)
+                                    (results-dir . ,results-dir))))
+                   (fuji--rag-ingest
+                    md-content filename metadata
+                    (lambda (content-id)
+                      (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
+                      ;; Archive and Save Metadata
+                      (fuji--add-metadata-entry content-id filename doc-file results-dir)
+                      
+                      (with-current-buffer chat-buffer
+                        (let ((inhibit-read-only t)) 
+                          (goto-char (point-max))
+                          (insert "- [X] Ingestion complete.\n\n")
+                          
+                          (setq-local fuji--content-id content-id)
+                          (setq-local fuji--filename filename)
+                          (setq-local fuji--results-dir results-dir)
+                          (setq-local fuji--pdf-buffer doc-buffer)
+                          
+                          ;; Context Injection
+                          (let* ((md-file (expand-file-name (concat (file-name-base doc-file) ".md")
+                                                            fuji--results-dir)))
+                            (with-temp-file md-file
+                              (insert md-content))
+                            (when (fboundp 'gptel-add-file)
+                              (let ((inhibit-message t))
+                                (gptel-add-file md-file))))
+                          
+                          ;; Config Backend & Model
+                          (when fuji-gptel-backend
+                            (let ((be (gptel-get-backend fuji-gptel-backend)))
+                              (when be (setq-local gptel-backend be))))
+                          (when fuji-gptel-model
+                            (setq-local gptel-model fuji-gptel-model))
+
+                          (setq-local gptel-directives 
+                                      (cons '(fuji . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
+                                            gptel-directives))
+                          (setq-local gptel-default-directive 'fuji)
+                          
+                          (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                            (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
+                          
+                          (insert "* Session Started\n")
+                          (gptel-mode)
+                          (fuji-mode 1)
+                          ;; Hooks
+                          (add-hook 'kill-buffer-hook #'fuji--save-session nil t)
+                          (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
+                          
+                          (fuji--log "[SUCCESS] Chat initialization complete. Ready!")
+                          (goto-char (point-max))
+                          (when-let* ((win (get-buffer-window chat-buffer)))
+                            (select-window win))))))))))
+
+          (pcase mode
+            ('direct
+             (if (string= doc-type "text")
+                 (funcall extraction-callback doc-file)
+               (funcall extraction-callback doc-file)))
+            ('offline
+             (let ((local-dir (read-directory-name "Select directory with pre-extracted results: " nil nil t)))
+               (fuji--log "[STEP 1/3] Loading pre-extracted results from: %s" local-dir)
+               (fuji--use-local-marker-result local-dir results-dir)
+               (let ((md-file (fuji--find-marker-output results-dir)))
+                 (if md-file
+                     (progn
+                       (fuji--log "[STEP 2/3] Pre-extracted results loaded. Ingesting content...")
+                       (funcall extraction-callback md-file))
+                   (error "Fuji: No .md file found in the selected directory!")))))
+            ('llm
+             (let ((extractor (fuji-get-extractor llm-tool)))
+               (unless extractor
+                 (error "Extractor '%s' not found. Please run M-x fuji-configure" llm-tool))
+               (funcall (fuji-extractor-extract-fn extractor)
+                        doc-file results-dir
+                        (lambda (md-file)
+                          (fuji--log "[STEP 2/3] Extraction finished. Ingesting content...")
+                          (funcall extraction-callback md-file)))))
+            ('fast
+             (if (string= doc-type "pdf")
+                 (fuji--extract-pdf-text doc-file results-dir extraction-callback)
+               (fuji--extract-binary-pandoc doc-file results-dir extraction-callback)))))))))
 
 (provide 'fuji)
 
