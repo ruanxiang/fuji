@@ -7,3 +7,17 @@
 *.elc
 fuji-local-config.el
 node_modules
+
+# Private Documentation
+TODO.org
+implementation_plan.md
+DEVELOPMENT_HISTORY.md
+WHY_RELOAD_NEEDED.md
+docs/
+
+# Dev Scripts & Tests
+fuji-read-test.el
+diagnose-buffer.el
+check_brackets.py
+fuji-init-fix.el
+*.sh
