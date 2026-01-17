@@ -1879,11 +1879,14 @@ Summarize findings from multiple documents when appropriate.")
           ;; 1. Local Cleanup (Original, Extracted Results, and Session)
           (let ((metadata (fuji--get-metadata-for-id id)))
             (when metadata
-              (let ((archived (or (cdr (assoc 'archived_path metadata))
-                                  (cdr (assoc 'archived-path metadata))))
-                    (results (cdr (assoc 'results_dir metadata)))
-                    ;; Determine session file path
-                    (session-file (fuji--get-session-file id)))
+              (let* ((raw-archived (or (cdr (assoc 'archived_path metadata))
+                                       (cdr (assoc 'archived-path metadata))))
+                     ;; Fix: Expand relative paths against cache directory
+                     (archived (when raw-archived (expand-file-name raw-archived fuji-cache-directory)))
+                     (raw-results (cdr (assoc 'results_dir metadata)))
+                     (results (when raw-results (expand-file-name raw-results fuji-cache-directory)))
+                     ;; Determine session file path
+                     (session-file (fuji--get-session-file id)))
                 
                 ;; Delete archived file
                 (when (and archived (file-exists-p archived))
