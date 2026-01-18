@@ -16,6 +16,7 @@
 (require 'fuji-rag)
 (require 'mcp nil t)
 (require 'json)
+(require 'cl-lib)
 
 ;;; Configuration
 
@@ -38,29 +39,39 @@ Returns nil if not connected."
 (defun fuji--graphlit-parse-result (result)
   "Parse the JSON result string from an MCP tool RESULT.
 Handles various formats of RESULT (plists, hash-tables, symbols)."
-  (let* ((content (or (plist-get result :content)
-                      (and (hash-table-p result) (gethash "content" result))
-                      (and (vectorp result) result)))
-         (first-item (when (and content (> (length content) 0))
-                       (aref content 0)))
-         (text-val (fuji--graphlit-normalize-string
-                    (or (plist-get first-item :text)
-                        (and (hash-table-p first-item) (gethash "text" first-item))))))
-    (if (or (string-empty-p text-val) (string= text-val "null"))
+  (let* ((content (cond
+                   ;; Case 1: Standard MCP Tool Result (plist with :content list)
+                   ((and (listp result) (plist-get result :content))
+                    (let ((c (plist-get result :content)))
+                      (if (vectorp c) (aref c 0) (car c))))
+                   ;; Case 2: Direct content object (rare)
+                   ((listp result) result)
+                   ;; Case 3: Raw
+                   (t result)))
+         (text-val (cond
+                    ((plist-get content :text) (plist-get content :text))
+                    ((and (hash-table-p content) (gethash "text" content)) (gethash "text" content))
+                    ;; Fallback: try to interpret result itself if it's not a content object
+                    ((stringp result) result)
+                    (t nil))))
+    
+    (if (or (null text-val) (string-empty-p text-val) (string= text-val "null"))
         (progn
-          (message "Fuji: Graphlit result text is empty or null.")
+          ;; For async calls, an empty result is often expected immediately
+          ;; Just return nil or a placeholder
+          (fuji--log "Graphlit result text is empty (Async ack from %S)" result)
           nil)
       (condition-case err
           (let* ((json-object-type 'alist)
                  (parsed (json-read-from-string text-val)))
-            (if (or (assoc 'answer parsed) (assoc 'message parsed) (assoc 'id parsed))
-                parsed
-              ;; If it's valid JSON but doesn't have our keys, 
-              ;; return the raw text-val as answer for safety
-              `((answer . ,text-val) (id . ,(cdr (assoc 'id parsed))))))
+             ;; Check if it needs unwrapping "ingestContent"
+            (if (assoc 'ingestContent parsed)
+                (cdr (assoc 'ingestContent parsed))
+              parsed))
         (error 
-         (message "Fuji: Graphlit JSON parse error: %S" text-val)
-         `((answer . ,text-val) (message . ,text-val)))))))
+         (fuji--log "Graphlit JSON parse error: %S" text-val)
+         ;; Return raw text as answer if JSON fails
+         `((answer . ,text-val)))))))
 
 ;;; RAG Backend Implementation
 
@@ -80,50 +91,87 @@ METADATA should be an alist. CALLBACK is called with content-id on success."
     (message "Fuji: Ingesting '%s' to Graphlit... (len: %d chars, approx %.2f KB)" 
              filename (length text) (/ (string-bytes text) 1024.0))
 
-    ;; Verify content integrity before sending to MCP
+    ;; Verify content integrity
     (condition-case err
         (let ((_ (json-encode text)))
           (message "Fuji: Content integrity verified."))
       (error
-       (error "Fuji: Content validation failed (JSON serialization error): %s" 
-              (error-message-string err))))
+       (error "Fuji: Content validation failed: %s" (error-message-string err))))
     
-    (let* ((timer nil)
+    (let* ((ingest-name (format "%s-%d" filename (floor (float-time))))
            (start-time (float-time))
-           (ingest-name (format "%s-%d" filename (floor (float-time))))
-           (success-cb (lambda (result)
-                        (when timer (cancel-timer timer))
-                        (let* ((parsed (fuji--graphlit-parse-result result))
-                               (content-id (and parsed (cdr (assoc 'id parsed)))))
-                          (if content-id
-                              (progn
-                                (message "Fuji: Graphlit ingestion complete (ID: %s). Total time: %.1fs" 
-                                         content-id (- (float-time) start-time))
-                                (funcall callback content-id))
-                            (error "Graphlit ingestion failed to return ID. Result: %s" result)))))
-           (error-cb (lambda (inner-err)
-                       (when timer (cancel-timer timer))
-                       (error "Graphlit ingestion error: %s" (error-message-string inner-err)))))
-      
-      ;; Start repeating progress timer (every 5 seconds)
-      (setq timer (run-with-timer 5 5
-                                  (lambda ()
-                                    (let ((elapsed (- (float-time) start-time)))
-                                      (if (> elapsed 300)
-                                          (message "Fuji: [WARNING] Graphlit ingestion taking longer than usual (>300s)...")
-                                        (message "Fuji: Ingesting to Graphlit... (%.0fs elapsed)" elapsed))))))
-      
+           (poll-timer nil)
+           (poll-count 0)
+           (max-polls 60) ; 5 mins (at 5s interval)
+           
+           (cleanup-fn (lambda ()
+                         (when poll-timer (cancel-timer poll-timer))))
+
+           (poll-fn 
+            (lambda () 
+              (setq poll-count (1+ poll-count))
+              (condition-case err
+                  (mcp-async-call-tool 
+                   conn "queryContents"
+                   ;; Graphlit filter syntax: filter content by name
+                   `((filter . ((name . ,ingest-name))))
+                                   (lambda (result)
+                                     (let* ((raw-result (fuji--graphlit-parse-result result))
+                                            ;; Normalize: Ensure we have a list of objects, not a single object
+                                            (content-list (if (and (listp raw-result)
+                                                                   (consp (car raw-result))
+                                                                   (symbolp (caar raw-result)))
+                                                              ;; It's a single alist ((key . val) ...), wrap it
+                                                              (list raw-result)
+                                                            raw-result))
+                                            (found (cl-some (lambda (item)
+                                                              (when (and (listp item)
+                                                                         (string= (cdr (assoc 'name item)) ingest-name))
+                                                                item))
+                                                            content-list))
+                                            (content-id (and found (cdr (assoc 'id found)))))
+                       (if content-id
+                           (progn
+                             (message "Fuji: Async ingestion complete (ID: %s). Total time: %.1fs" 
+                                      content-id (- (float-time) start-time))
+                             (funcall cleanup-fn)
+                             (funcall callback content-id))
+                         ;; Not found yet, continue polling...
+                         (if (> poll-count max-polls)
+                             (progn
+                               (message "Fuji: Ingestion timed out after %.0fs" (- (float-time) start-time))
+                               (funcall cleanup-fn)
+                               ;; Optional: call callback with nil or error?
+                               ;; Current contract expects ID. Let's error.
+                               (error "Graphlit ingestion timed out waiting for ID"))
+                           (message "Fuji: Still processing... (%.0fs)" (- (float-time) start-time))))))
+                   (lambda (err)
+                     (message "Fuji: Polling error (will retry): %s" (error-message-string err))))
+                (error 
+                 (message "Fuji: Polling internal error: %s" (error-message-string err)))))))
+
+      ;; Initial Ingestion Call
       (condition-case outer-err
-          (mcp-async-call-tool conn "ingestText"
-                               `((text . ,text)
-                                 (name . ,ingest-name)
-                                 (mimeType . "text/markdown")
-                                 (isSynchronous . t))
-                               success-cb
-                               error-cb)
+          (mcp-async-call-tool 
+           conn "ingestText"
+           `((text . ,text)
+             (name . ,ingest-name)
+             (mimeType . "text/markdown")
+             (isSynchronous . nil))
+           (lambda (result)
+             (let* ((parsed (fuji--graphlit-parse-result result))
+                    (immediate-id (and parsed (cdr (assoc 'id parsed)))))
+               (if immediate-id
+                   (progn
+                     (message "Fuji: Ingestion complete (Immediate ID: %s)" immediate-id)
+                     (funcall callback immediate-id))
+                 ;; No immediate ID -> Start Polling
+                 (message "Fuji: Async ingestion initiated. Polling for completion...")
+                 (setq poll-timer (run-with-timer 2 5 poll-fn)))))
+           (lambda (err)
+             (error "Graphlit ingestion request failed: %s" (error-message-string err))))
         (error
-         (when timer (cancel-timer timer))
-         (error "Graphlit MCP call error: %s" (error-message-string outer-err)))))))
+         (error "Graphlit MCP tool call failed: %s" (error-message-string outer-err)))))))
 
 (defun fuji--graphlit-query (query content-ids callback)
   "Query CONTENT-IDS with QUERY using Graphlit.

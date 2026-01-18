@@ -210,15 +210,7 @@ Defaults to 'originals/' relative to cache directory if nil."
       (set-buffer-modified-p nil))
     (message "Fuji: %s" msg)))
 
-(defun fuji--setup-3-buffer-layout (pdf-buffer chat-buffer progress-buffer)
-  "Arrange windows: PDF and Chat side-by-side, Progress at the bottom (minibuffer-like)."
-  (delete-other-windows)
-  (let* ((prog-win (split-window-below -5))) ;; Create a 5-line window at the bottom
-    (set-window-buffer prog-win progress-buffer)
-    (set-window-dedicated-p prog-win t) ;; Make it dedicated
-    (let ((chat-win (split-window-horizontally)))
-      (set-window-buffer (selected-window) pdf-buffer)
-      (set-window-buffer chat-win chat-buffer))))
+
 
 (defun fuji--setup-2-buffer-layout (chat-buffer progress-buffer)
   "Arrange windows: Chat full width, Progress at the bottom.
@@ -965,10 +957,12 @@ Prompts for content deletion and kills related buffers."
   "Search the research paper for specific details using Graphlit RAG.
 This is used as a gptel tool in hybrid mode."
   (let* ((conn (fuji--get-mcp-connection))
-         (ids (cond 
+         (all-ids (cond 
                ((bound-and-true-p fuji--content-ids) (vconcat fuji--content-ids))
                ((bound-and-true-p fuji--content-id) (vector fuji--content-id))
-               (t nil))))
+               (t nil)))
+         ;; Filter out LOCAL- IDs for the tool call
+         (ids (cl-remove-if (lambda (id) (string-prefix-p "LOCAL-" (format "%s" id))) all-ids)))
     (unless (and ids (> (length ids) 0))
       (error "Fuji: No content context found in current buffer"))
     (let ((result (mcp-call-tool conn "promptConversation"
@@ -1049,52 +1043,7 @@ This is used as a gptel tool in hybrid mode."
 Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 
 
-(defun fuji-library-add-file ()
-  "Add a new file to the library using `fuji-read`."
-  (interactive)
-  (fuji-read)
-  ;; Refresh happens implicitly if fuji-read succeeds and user switches back, 
-  ;; but we can force refresh if we are already in the library buffer
-  (when (derived-mode-p 'fuji-library-mode)
-    (fuji-library-refresh)))
 
-(defun fuji-library-edit-title ()
-  "Edit the title of the current entry."
-  (interactive)
-  (let* ((id (tabulated-list-get-id))
-         (metadata (fuji--get-metadata-for-id id))
-         (current-title (or (cdr (assoc 'title metadata)) (cdr (assoc 'filename metadata)) ""))
-         (new-title (read-string "Edit Title: " current-title)))
-    (when (not (string-equal current-title new-title))
-      (let ((entries (fuji--load-metadata-cache)))
-        ;; Update metadata cache
-        (setf (alist-get 'title (cdr (assoc (if (stringp id) (intern id) id) entries))) new-title)
-        (fuji--save-metadata-cache entries)
-        (message "Fuji: Title updated."))
-      (fuji-library-refresh))))
-
-(defun fuji-library-edit-memo ()
-  "Edit the memo of the current entry."
-  (interactive)
-  (let* ((id (tabulated-list-get-id))
-         (metadata (fuji--get-metadata-for-id id))
-         (current-memo (or (cdr (assoc 'memo metadata)) ""))
-         (new-memo (read-string "Edit Memo: " current-memo)))
-    (when (not (string-equal current-memo new-memo))
-      (let ((entries (fuji--load-metadata-cache)))
-        ;; Update metadata cache
-        (setf (alist-get 'memo (cdr (assoc (if (stringp id) (intern id) id) entries))) new-memo)
-        (fuji--save-metadata-cache entries)
-        (message "Fuji: Memo updated."))
-      (fuji-library-refresh))))
-
-(defun fuji-library-open-session ()
-  "Open or resume session for the current entry."
-  (interactive)
-  (let ((id (tabulated-list-get-id)))
-    (if id
-        (fuji--load-session id)
-      (message "Fuji: No entry selected."))))
 
 (defvar fuji-library-mode-map (make-sparse-keymap)
   "Keymap for `fuji-library-mode'.")
@@ -1193,13 +1142,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
       (error
        (message "Fuji: Failed to save metadata cache: %s" (error-message-string err))))))
 
-(defun fuji--format-file-size (bytes)
-  "Format BYTES as human-readable file size."
-  (cond
-   ((>= bytes 1073741824) (format "%.1f GB" (/ bytes 1073741824.0)))
-   ((>= bytes 1048576) (format "%.1f MB" (/ bytes 1048576.0)))
-   ((>= bytes 1024) (format "%.1f KB" (/ bytes 1024.0)))
-   (t (format "%d B" bytes))))
+
 
 (defun fuji--format-date (iso-date)
   "Format ISO-DATE string to readable format."
@@ -1208,18 +1151,35 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
     "N/A"))
 
 (defun fuji-library-refresh ()
-  "Refresh the content list from the active RAG backend."
+  "Refresh the content list from the active RAG backend AND local cache."
   (interactive)
-  (message "Fuji: Querying %s..." fuji-rag-backend)
-  ;; Use unified RAG API instead of Graphlit-specific call
+  (message "Fuji: Querying %s and Local Cache..." fuji-rag-backend)
+  ;; Unified RAG API + Local Merge
   (fuji--rag-list
-   (lambda (contents)
-     (setq fuji--content-list contents)
-     (let ((buf (get-buffer "*Fuji-Library*")))
-       (when (buffer-live-p buf)
-         (with-current-buffer buf
-           (fuji-library--populate-buffer))))
-     (message "Fuji: Refreshed (%d items)" (length contents)))))
+   (lambda (rag-contents)
+     (let* ((metadata-entries (fuji--load-metadata-cache))
+            (local-entries
+             (cl-loop for entry in metadata-entries
+                      for id-raw = (car entry)
+                      for id = (format "%s" id-raw) ;; Ensure ID is string
+                      for meta = (cdr entry)
+                      when (string-prefix-p "LOCAL-" id)
+                      collect
+                      `((id . ,id)
+                        (name . ,(or (alist-get 'filename meta) "Unknown Local File"))
+                        (createdDate . ,(or (alist-get 'upload_date meta) 
+                                            (format-time-string "%Y-%m-%dT%H:%M:%SZ")))
+                        (fileSize . 0) ;; Local file size logic can be added later
+                        (state . "LOCAL")))))
+       ;; Merge lists (Local + RAG)
+       (setq fuji--content-list (append local-entries rag-contents))
+       
+       (let ((buf (get-buffer "*Fuji-Library*")))
+         (when (buffer-live-p buf)
+           (with-current-buffer buf
+             (fuji-library--populate-buffer))))
+       (message "Fuji: Refreshed (%d RAG + %d Local items)" 
+                (length rag-contents) (length local-entries))))))
 
 
 (defun fuji-library--populate-buffer (&optional content-list)
@@ -1468,7 +1428,12 @@ Creates the directory if it doesn't exist."
           (setq-local gptel-default-directive 'fuji)
 
           (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-            (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
+            ;; Hybrid Mode: Only enable Graphlit tool if ID is NOT local
+            (if (string-prefix-p "LOCAL-" (format "%s" content-id))
+                (progn
+                  (setq-local gptel-tools nil)
+                  (message "Fuji: Local-only mode (RAG disabled for large file)."))
+              (setq-local gptel-tools (list fuji-gptel-tool-graphlit))))
 
           ;; 5. Enable Modes & Hooks
           (gptel-mode)
@@ -1800,52 +1765,75 @@ Context Strategy:
         (fuji-mode)
         (gptel-mode 1) ;; Enable GPTel interaction
         
-        ;; 4. Initialize Context
+        ;; 4. Initialize Context & Hybrid Strategy
         (when (fboundp 'gptel-context-remove-all)
           (gptel-context-remove-all))
         
-        ;; 5. Smart Context Strategy
-        (insert "#+TITLE: Knowledge Base Chat\n")
-        (insert (format "* Checking %d documents...\n" count))
-        
-        (if (<= count 5)
-            ;; Small Group: Inject All
-            (progn
-              (insert "Mode: Full Context + RAG\n\n")
-              (dolist (f files)
-                (when (fboundp 'gptel-add-file)
-                  (let ((inhibit-message t))
-                    (gptel-add-file (cdr f))))
-                (insert (format "- Imported: %s\n" (car f)))))
-          ;; Large Group: RAG Only
-          (insert "Mode: RAG Only (Too many documents for full context)\n")
-          (insert "System is aware of these documents via Graphlit:\n")
-          (dolist (id content-ids)
-             (insert (format "- ID: %s\n" id))))
-        
-        (insert "\n---\n\n")
-        
-        ;; 6. Setup Local Variables
-        (setq-local fuji--content-ids (nreverse content-ids)) ;; Store LIST
-        
-        ;; 7. GPTel Config
-         (when fuji-gptel-backend
+        (let ((local-files '())
+              (remote-ids '()))
+          
+          ;; Partition IDs & Gather Local Files
+           (dolist (id content-ids)
+             (let* ((meta (fuji--get-metadata-for-id id))
+                    (res-dir (cdr (assoc 'results_dir meta)))
+                    (fname (cdr (assoc 'filename meta)))
+                    (md-path (when res-dir ;; Check if we have a local cache file
+                               (expand-file-name (concat (file-name-base fname) ".md") 
+                                                 (if (file-name-absolute-p res-dir) res-dir 
+                                                   (expand-file-name res-dir fuji-cache-directory))))))
+               
+               ;; Always try to add local markdown to context if it exists
+               (if (and md-path (file-exists-p md-path))
+                   (push md-path local-files)
+                 ;; If no markdown, maybe just rely on RAG?
+                 nil)
+
+               ;; If NOT a LOCAL-only file, add to RAG IDs
+               (unless (string-prefix-p "LOCAL-" (format "%s" id))
+                 (push id remote-ids))))
+
+          ;; Inject Local Files (Strong Context)
+          (when (fboundp 'gptel-add-file)
+            (let ((inhibit-message t))
+              (dolist (f local-files)
+                (gptel-add-file f))))
+
+          ;; 5. Insert Header
+          (insert "#+TITLE: Group Chat (" (number-to-string count) " documents)\n")
+          (insert "#+STARTUP: indent\n\n")
+          (insert "* System: " (number-to-string (length local-files)) " local files loaded into context.\n")
+          (when remote-ids
+             (insert "* System: " (number-to-string (length remote-ids)) " remote files available via RAG.\n"))
+          (insert "\n---\n\n")
+          
+          ;; 6. Setup Local Variables
+          (setq-local fuji--content-ids (nreverse content-ids))
+          
+          ;; 7. GPTel Config
+          (when fuji-gptel-backend
             (let ((be (gptel-get-backend fuji-gptel-backend)))
               (when be (setq-local gptel-backend be))))
           (when fuji-gptel-model
             (setq-local gptel-model fuji-gptel-model))
 
-         (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-            (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
-         
-         (setq-local gptel-directives 
+          ;; Tools: Only enable if we have remote content
+          (if remote-ids
+              (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
+                (message "Fuji: Hybrid Chat initialized (%d local, %d remote)" 
+                         (length local-files) (length remote-ids)))
+            ;; Else: No remote content -> No RAG tool
+            (setq-local gptel-tools nil)
+            (message "Fuji: Local Chat initialized (%d docs)" (length local-files)))
+          
+          (setq-local gptel-directives 
                       (cons '(fuji-group . "You are a Knowledge Base Assistant. You have access to a specific group of documents. 
-If the user asks about these documents, ALWAYS use the 'query_graphlit' tool to search for answers, as you may not have their full text in context.
-Summarize findings from multiple documents when appropriate.")
+Some documents are provided directly in your context, while others are available via the 'query_graphlit' tool.
+If the user asks about the remote documents (listed in the System header), use the tool to search for answers.")
                             gptel-directives))
           (setq-local gptel-default-directive 'fuji-group)
-        
-        (message "Fuji: Group Chat started with %d documents." count)))))
+          
+          (message "Fuji: Hybrid Group Chat started with %d documents." count))))))
 
 (defun fuji-library-unmark ()
   "Unmark the current entry."
@@ -2130,6 +2118,7 @@ Choose extraction method:
         (fuji--setup-2-buffer-layout doc-buffer chat-buffer)
         (fuji--log "Workflow started for %s document in mode: %s" doc-type mode)
 
+        ;; Define Callback Logic
         (let ((extraction-callback
                (lambda (md-file)
                  ;; Update doc buffer for binary files
@@ -2141,65 +2130,120 @@ Choose extraction method:
                        (insert-file-contents md-file)
                        (markdown-mode)
                        (view-mode 1))))
+                 
                  (let* ((md-content (with-temp-buffer
                                       (insert-file-contents md-file)
                                       (buffer-string)))
                         (metadata `((filename . ,filename)
                                     (pdf-path . ,doc-file)
                                     (results-dir . ,results-dir))))
-                   (fuji--rag-ingest
-                    md-content filename metadata
-                    (lambda (content-id)
-                      (fuji--log "[STEP 3/3] Ingestion complete (ID: %s). Finalizing chat..." content-id)
-                      ;; Archive and Save Metadata
-                      (fuji--add-metadata-entry content-id filename doc-file results-dir)
-                      
-                      (with-current-buffer chat-buffer
-                        (let ((inhibit-read-only t)) 
-                          (goto-char (point-max))
-                          (insert "- [X] Ingestion complete.\n\n")
-                          
-                          (setq-local fuji--content-id content-id)
-                          (setq-local fuji--filename filename)
-                          (setq-local fuji--results-dir results-dir)
-                          (setq-local fuji--pdf-buffer doc-buffer)
-                          
-                          ;; Context Injection
-                          (let* ((md-file (expand-file-name (concat (file-name-base doc-file) ".md")
-                                                            fuji--results-dir)))
-                            (with-temp-file md-file
-                              (insert md-content))
-                            (when (fboundp 'gptel-add-file)
-                              (let ((inhibit-message t))
-                                (gptel-add-file md-file))))
-                          
-                          ;; Config Backend & Model
-                          (when fuji-gptel-backend
-                            (let ((be (gptel-get-backend fuji-gptel-backend)))
-                              (when be (setq-local gptel-backend be))))
-                          (when fuji-gptel-model
-                            (setq-local gptel-model fuji-gptel-model))
+                   
+                   ;; 1. Initialize Chat UI immediately (show PENDING status)
+                   (with-current-buffer chat-buffer
+                     (let ((inhibit-read-only t)
+                           (temp-id (format "PENDING-%s" (secure-hash 'md5 filename))))
+                       
+                       ;; Register Pending Metadata
+                       (fuji--add-metadata-entry temp-id filename doc-file results-dir)
 
-                          (setq-local gptel-directives 
-                                      (cons '(fuji . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
-                                            gptel-directives))
-                          (setq-local gptel-default-directive 'fuji)
-                          
-                          (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-                            (setq-local gptel-tools (list fuji-gptel-tool-graphlit)))
-                          
-                          (insert "* Session Started\n")
-                          (gptel-mode)
-                          (fuji-mode 1)
-                          ;; Hooks
-                          (add-hook 'kill-buffer-hook #'fuji-save-session nil t)
-                          (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
-                          
-                          (fuji--log "[SUCCESS] Chat initialization complete. Ready!")
-                          (goto-char (point-max))
-                          (when-let* ((win (get-buffer-window chat-buffer)))
-                            (select-window win))))))))))
+                       ;; Basic Setup
+                       (setq-local fuji--content-id temp-id)
+                       (setq-local fuji--filename filename)
+                       (setq-local fuji--results-dir results-dir)
+                       (setq-local fuji--pdf-buffer doc-buffer)
 
+                       ;; Context Injection (Local Markdown)
+                       (let* ((local-md-file (expand-file-name (concat (file-name-base doc-file) ".md")
+                                                               fuji--results-dir)))
+                         (with-temp-file local-md-file
+                           (insert md-content))
+                         (when (fboundp 'gptel-add-file)
+                           (let ((inhibit-message t))
+                             (gptel-add-file local-md-file))))
+
+                       ;; GPTel Configuration
+                       (when fuji-gptel-backend
+                         (let ((be (gptel-get-backend fuji-gptel-backend)))
+                           (when be (setq-local gptel-backend be))))
+                       (when fuji-gptel-model
+                         (setq-local gptel-model fuji-gptel-model))
+
+                       ;; Directives
+                       (setq-local gptel-directives 
+                                   (cons '(fuji . "You are an academic assistant. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
+                                         gptel-directives))
+                       (setq-local gptel-default-directive 'fuji)
+
+                       ;; Initialize Mode and UI
+                       (insert "* Session Started\n")
+                       (gptel-mode)
+                       (fuji-mode 1)
+                       
+                       ;; Hooks
+                       (add-hook 'kill-buffer-hook #'fuji-save-session nil t)
+                       (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
+                       
+                       ;; Add Ingestion Log
+                       (insert "- [ ] Ingesting to RAG backend (Async)... (ID: " temp-id ")\n")
+                       (goto-char (point-max))
+                   
+                   ;; Ensure Chat is Visible
+                   (pop-to-buffer chat-buffer)
+
+                   (let ((text-size (string-bytes md-content)))
+                     (if (> text-size 102400) ;; 100KB threshold
+                         ;; Case A: Large File -> Local Only
+                         (let ((local-id (format "LOCAL-%s" (secure-hash 'md5 filename))))
+                           (fuji--log "[INFO] File too large for RAG (%d bytes). Using Local Mode." text-size)
+                           
+                           ;; Register Local Metadata
+                           (fuji--remove-metadata-entry temp-id)
+                           (fuji--add-metadata-entry local-id filename doc-file results-dir)
+                           
+                           ;; Update Chat Session
+                           (with-current-buffer chat-buffer
+                             (let ((inhibit-read-only t))
+                               (setq-local fuji--content-id local-id)
+                               (setq-local gptel-tools nil) ;; Disable RAG
+                               
+                               ;; Update Log
+                               (save-excursion
+                                 (goto-char (point-min))
+                                 (when (re-search-forward "- \\[ \\] Ingesting to RAG backend (Async)..." nil t)
+                                   (replace-match (format "- [X] Large file (>100KB). Indexed Locally Only (ID: %s)." local-id)))))))
+
+                       ;; Case B: Small File -> Graphlit Ingestion
+                       (progn
+                         (fuji--log "[STEP 3/3] Starting async ingestion for %s..." filename)
+                         (fuji--rag-ingest
+                          md-content filename metadata
+                          (lambda (content-id)
+                            (fuji--log "[SUCCESS] Ingestion complete (ID: %s). Enabling RAG tools." content-id)
+                            
+                            ;; Swap Metadata: Remove PENDING, Add Real
+                            (fuji--remove-metadata-entry temp-id)
+                            (fuji--add-metadata-entry content-id filename doc-file results-dir)
+                            
+                            ;; Update Running Session
+                            (when (buffer-live-p chat-buffer)
+                              (with-current-buffer chat-buffer
+                                (let ((inhibit-read-only t))
+                                  ;; Update ID
+                                  (setq-local fuji--content-id content-id)
+                                  
+                                  ;; Enable RAG Tools
+                                  (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                                    (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
+                                    (message "Fuji: RAG tools enabled for chat."))
+                                  
+                                  ;; Update Log in Buffer
+                                  (save-excursion
+                                    (goto-char (point-min))
+                                    (when (re-search-forward "- \\[ \\] Ingesting to RAG backend (Async)..." nil t)
+                                      (replace-match (format "- [X] Ingestion complete using Graphlit (ID: %s)." content-id))))
+                                  (goto-char (point-max))))))))))))))))
+
+          ;; Execute Workflow
           (pcase mode
             ('direct
              (if (string= doc-type "text")
