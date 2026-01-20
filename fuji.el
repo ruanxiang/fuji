@@ -563,9 +563,19 @@ favoring bib-search integration if available."
        ((string-match "\\(https?://[^ ]+\\)" file)
         (match-string 1 file))
        
-       ;; C. Detect www. prefix in the filename part
-       ((string-match "^www\\." nondir)
-        (concat "https://" nondir))
+       ;; C. Detect www. prefix OR known TLD in the filename part
+       ((or (string-match "^www\\." nondir)
+            (and (not (file-exists-p abs-path))
+                 (let ((ext (file-name-extension nondir)))
+                   (and ext 
+                        (member (downcase ext) 
+                                '("com" "org" "net" "edu" "gov" "mil" "int" 
+                                  "io" "ai" "co" "uk" "ca" "de" "fr" "jp" 
+                                  "cn" "ru" "br" "au" "in" "info" "biz" 
+                                  "me" "tv" "xyz" "tech" "site" "online" "app"))))))
+        (if (string-match "^https?://" nondir)
+            nondir
+          (concat "https://" nondir)))
        
        ;; D. Default: Return absolute path
        (t abs-path))))))
