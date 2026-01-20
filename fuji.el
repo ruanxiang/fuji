@@ -559,9 +559,12 @@ favoring bib-search integration if available."
        ((file-exists-p abs-path)
         abs-path)
        
-       ;; B. Detect URL pattern in the path (e.g. pasted https://... inside a path)
-       ((string-match "\\(https?://[^ ]+\\)" file)
-        (match-string 1 file))
+       ;; B. Detect URL pattern in the path (handle collapsed slashes e.g. https:/...)
+       ((string-match "\\(https?:/+[^\n ]+\\)" file)
+        (let ((match (match-string 1 file)))
+          (if (string-match "^\\(https?\\):/+\\(.*\\)" match)
+              (concat (match-string 1 match) "://" (match-string 2 match))
+            match)))
        
        ;; C. Deep Path Scan: Check if any path component looks like a domain
        ;; This handles cases like: /path/to/i.mediatek.com/ai where user typed "i.mediatek.com/ai"
@@ -570,7 +573,8 @@ favoring bib-search integration if available."
                     (tlds '("com" "org" "net" "edu" "gov" "mil" "int" 
                             "io" "ai" "co" "uk" "ca" "de" "fr" "jp" 
                             "cn" "ru" "br" "au" "in" "info" "biz" 
-                            "me" "tv" "xyz" "tech" "site" "online" "app"))
+                            "me" "tv" "xyz" "tech" "site" "online" "app"
+                            "tw" "hk" "sg" "kr" "my" "vn" "ph" "th" "id"))
                     (domain-part-index nil))
                ;; Find first part with valid TLD
                (cl-loop for part in parts
@@ -586,7 +590,7 @@ favoring bib-search integration if available."
                         (full-url (if (string-match "^https?://" url-path)
                                       url-path
                                     (concat "https://" url-path))))
-                   full-url))))
+                   full-url)))))
        
        ;; D. Default: Return absolute path
        (t abs-path))))))
@@ -798,6 +802,11 @@ PROMPT is the user query (string or list of plists). ARGS contains :fsm or direc
                                              (gptel--fsm-transition fsm 'TYPE))
                                            
                                            (funcall callback response info)
+
+                                           ;; Prepare for next turn with a foldable heading
+                                           (goto-char (point-max))
+                                           (unless (string-suffix-p "** " (buffer-substring (max 1 (- (point-max) 3)) (point-max)))
+                                             (insert "\n\n** "))
                                            
                                            ;; FSM Transition: Finalize to 'DONE' state
                                            (when (and fsm (fboundp 'gptel--fsm-transition))
@@ -813,6 +822,12 @@ PROMPT is the user query (string or list of plists). ARGS contains :fsm or direc
                                      (message "Fuji WARNING: No callback provided, manually inserting.")
                                      (goto-char (point-max))
                                      (insert response)
+
+                                     ;; Prepare for next turn with a foldable heading
+                                     (goto-char (point-max))
+                                     (unless (string-suffix-p "** " (buffer-substring (max 1 (- (point-max) 3)) (point-max)))
+                                       (insert "\n\n** "))
+
                                      (when (and fsm (fboundp 'gptel--fsm-transition))
                                        (gptel--fsm-transition fsm 'DONE)))))))
             (error-wrapper (lambda (err-msg)
@@ -1317,14 +1332,14 @@ Signals an error if no file can be found."
                           raw-archived-path))
          (results-dir (cdr (assoc 'results_dir metadata))))
     (cond
-     ;; Original file exists
-     ((and original-path (file-exists-p original-path))
-      (cons original-path 'original))
-     ;; Archived file exists
+     ;; 1. Archived file exists (Primary Source of Truth)
      ((and archived-path (file-exists-p archived-path))
-      (fuji--log "Original file not found, using archived copy")
       (cons archived-path 'archived))
-     ;; Fallback to markdown
+     ;; 2. Original file exists (Fallback)
+     ((and original-path (file-exists-p original-path))
+      (fuji--log "Archived file not found, using original copy")
+      (cons original-path 'original))
+     ;; 3. Fallback to markdown
      ((and results-dir (file-directory-p results-dir))
       (let ((md-file (fuji--find-marker-output results-dir)))
         (when md-file
@@ -1377,15 +1392,48 @@ Creates the directory if it doesn't exist."
     ;; Enhance UX: ensure right window is focused for chatting
     (select-window right-win)))
 
+;; Define dedicated handler for robustness
+(defun fuji--gptel-response-handler (&optional _beg _end)
+  "Hook to run after gptel response. 
+   Ensures prompt level is correct (**) and moves cursor to bottom."
+  ;; 1. Active Correction: Fix PROMPT heading if it became Level 1
+  (save-excursion
+    (when (re-search-backward "^\\* " nil t)
+      (let ((line (buffer-substring-no-properties (line-beginning-position) (line-end-position))))
+        (unless (or (string-match-p "Discussion" line)
+                    (string-match-p "System Log" line))
+          (replace-match "** ")))))
+  
+  ;; 2. Prepare Next Prompt & Move Cursor (Delayed)
+  (run-at-time "0.2 sec" nil 
+               (lambda (buf)
+                 (when (buffer-live-p buf)
+                   (with-current-buffer buf
+                     (goto-char (point-max))
+                     
+                     ;; Check/Fix Prompt Level
+                     (if (string-suffix-p "\n* " (buffer-substring (max 1 (- (point-max) 3)) (point-max)))
+                         (progn
+                           (delete-char -2)
+                           (insert "** "))
+                       (unless (string-suffix-p "** " (buffer-substring (max 1 (- (point-max) 3)) (point-max)))
+                         (insert "\n\n** ")))
+                     
+                     ;; Scroll
+                     (when (get-buffer-window buf)
+                       (set-window-point (get-buffer-window buf) (point-max))
+                       (with-selected-window (get-buffer-window buf)
+                         (recenter -1))))))
+               (current-buffer)))
+
 (defun fuji--load-session (content-id)
   "Restore reading session for CONTENT-ID."
   (let* ((metadata (fuji--get-metadata-for-id content-id))
          (filename (or (cdr (assoc 'filename metadata)) "Unknown"))
-         (original (cdr (assoc 'original_path metadata)))
-         (archived (cdr (assoc 'archived_path metadata)))
+         ;; Use unified path resolution (Priority: Archived > Original > Markdown)
+         (path-info (fuji--resolve-file-path content-id))
+         (doc-path (car path-info))
          (results (cdr (assoc 'results_dir metadata)))
-         ;; Prefer original if available, else archived
-         (doc-path (if (and original (file-exists-p original)) original archived))
          (session-file (fuji--get-session-file content-id))
          (session-content (when (file-exists-p session-file)
                             (with-temp-buffer
@@ -1393,8 +1441,7 @@ Creates the directory if it doesn't exist."
                               (buffer-string)))))
     
     (unless (and doc-path (file-exists-p doc-path))
-      (error "Document file not found for %s (Original: %s, Archived: %s)" 
-             filename original archived))
+      (error "Critical: Document file not found for %s" filename))
 
     ;; Open Document
     (let ((doc-buffer (find-file-noselect doc-path))
@@ -1407,18 +1454,88 @@ Creates the directory if it doesn't exist."
       (with-current-buffer chat-buffer
         (let ((inhibit-read-only t))
           (erase-buffer)
-          (org-mode)
-          
           ;; 1. Restore Content
           (if session-content
-              (insert session-content)
+              (progn
+                (insert session-content)
+                
+                ;; Migration & Cleanup: Enforce rigid 2-level structure
+                (message "Fuji: Verifying chat structure...")
+                (let ((inhibit-read-only t)
+                      (case-fold-search nil)) ;; Case-sensitive match for "* Discussion"
+                  
+                  ;; 1.0 Ensure System Log is Level 1 (Upgrade if needed) & Move to Top
+                  (goto-char (point-min))
+                  ;; Match any heading level containing "System Log", case-insensitive
+                  (let ((case-fold-search t)
+                        (system-log-content nil))
+                    (when (re-search-forward "^\\*+[ \t]*.*System Log.*$" nil t)
+                      ;; Found it. Extract it.
+                      (beginning-of-line)
+                      (let ((beg (point)))
+                        (org-end-of-subtree)
+                        (setq system-log-content (buffer-substring beg (point)))
+                        (delete-region beg (point))))
+                    
+                    ;; If found (and deleted), or if we need to verify its position
+                    (when system-log-content
+                       ;; Normalize title to Level 1 "* Fuji System Log"
+                       (with-temp-buffer
+                         (insert system-log-content)
+                         (goto-char (point-min))
+                         (when (looking-at "^\\*+[ \t]*.*System Log.*$")
+                           (replace-match "* Fuji System Log"))
+                         (setq system-log-content (buffer-string)))
+                       
+                       ;; Insert at top (after properties)
+                       (goto-char (point-min))
+                       (while (looking-at "^#\\+") (forward-line 1))
+                       (unless (looking-at "^$") (insert "\n"))
+                       (insert "\n" system-log-content "\n")))
+
+                  ;; 1. Demote ALL Level 1 headers that are NOT "* Discussion" or "* Fuji System Log"
+                  (goto-char (point-min))
+                  (while (re-search-forward "^\\* \\(.*\\)$" nil t)
+                    (let ((title (match-string 1)))
+                      (unless (or (string-equal title "Discussion")
+                                  (string-match-p "System Log" title))
+                        ;; Replace "* Title" with "** Title"
+                        (replace-match "** \\1"))))
+
+                  ;; 2. Ensure "* Discussion" container exists
+                  (goto-char (point-min))
+                  (unless (re-search-forward "^\\* Discussion$" nil t)
+                     ;; Insert global Discussion header after properties
+                     (goto-char (point-min))
+                     (while (looking-at "^#\\+")
+                       (forward-line 1))
+                     (while (re-search-forward "^\\* .*System Log.*" nil t) ;; skip System Log if present at top
+                        (org-end-of-subtree))
+                     (unless (looking-at "^$") (insert "\n"))
+                     (insert "\n* Discussion\n")))
+
+                ;; 3. Enforce Startup Settings
+                (goto-char (point-min))
+                (if (re-search-forward "^#\\+STARTUP:.*$" nil t)
+                    (let ((current-startup (match-string 0)))
+                      (unless (string-match-p "overview" current-startup)
+                        (end-of-line)
+                        (insert " overview")))
+                  (goto-char (point-min))
+                  (insert "#+STARTUP: indent overview\n")))
             ;; Default Header if no session
             (insert "#+TITLE: Chat Session: " filename "\n"
-                    "#+STARTUP: indent\n"
+                    "#+STARTUP: indent overview\n"
                     "#+PROPERTY: header-args :results silent\n\n"
-                    "* Session Started: " (format-time-string "[%Y-%m-%d %H:%M]") "\n\n"))
+                    "* Fuji System Log\n:PROPERTIES:\n:Created: " (format-time-string "[%Y-%m-%d %H:%M]") "\n:END:\n"
+                    "* Discussion\n\n"
+                    "** "))
           
+          ;; Initialize Org Mode after content is inserted to parse #+STARTUP
+          (org-mode)
           ;; 2. Set Local Variables
+          ;; (Moved to end of function to ensure they override any defaults)
+
           (setq-local fuji--content-id content-id)
           (setq-local fuji--filename filename)
           (setq-local fuji--results-dir results)
@@ -1431,17 +1548,22 @@ Creates the directory if it doesn't exist."
 
           ;; 3. Context Injection (Hybrid Mode)
           (when (and results (file-exists-p (expand-file-name (concat (file-name-base filename) ".md") results)))
-             (let ((md-file (expand-file-name (concat (file-name-base filename) ".md") results)))
-               (when (fboundp 'gptel-add-file)
-                 (let ((inhibit-message t))
-                   (gptel-add-file md-file)))))
+            (fuji-context-add-file (expand-file-name (concat (file-name-base filename) ".md") results)))
+          
+          
+          ;; 4. Final UI Adjustment: Jump to bottom
+          (goto-char (point-max))
+          (when (get-buffer-window (current-buffer))
+            (set-window-point (get-buffer-window (current-buffer)) (point-max))))
 
           ;; 4. GPTel & Graphlit Config
           (when fuji-gptel-backend
             (let ((be (gptel-get-backend fuji-gptel-backend)))
               (when be (setq-local gptel-backend be))))
           (when fuji-gptel-model
-            (setq-local gptel-model fuji-gptel-model))
+            (setq-local gptel-model (if (stringp fuji-gptel-model)
+                                        (intern fuji-gptel-model)
+                                      fuji-gptel-model)))
 
           (setq-local gptel-directives 
                       (cons '(fuji . "You are an academic assistant by Ruan. Answer questions based on the provided document context. If you need more info from the paper using semantic search, use the 'query_graphlit' tool.")
@@ -1457,14 +1579,26 @@ Creates the directory if it doesn't exist."
               (setq-local gptel-tools (list fuji-gptel-tool-graphlit))))
 
           ;; 5. Enable Modes & Hooks
-          (gptel-mode)
+          (if (fboundp 'gptel-mode) (gptel-mode 1))
           (fuji-mode 1)
+          
+          ;; Ensure hook is locally set for standard responses
+          (add-hook 'gptel-post-response-functions #'fuji--gptel-response-handler nil t)
+          
+          ;; Ensure prompt prefix is set effectively
+          (setq-local gptel-prompt-prefix-alist '((org-mode . "** ") (default . "** ")))
           ;; Auto-save hooks
           (add-hook 'kill-buffer-hook #'fuji-save-session nil t)
           (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
           
+          ;; 4. Final UI Adjustment: Jump to bottom
           (goto-char (point-max))
-          (message "Fuji: Session loaded for %s" filename))))))
+          (ignore-errors (org-show-context)) ;; Use org-show-context to reveal
+          (when (get-buffer-window (current-buffer))
+            (set-window-point (get-buffer-window (current-buffer)) (point-max))
+            (with-selected-window (get-buffer-window (current-buffer))
+              (recenter -1)))
+          (message "Fuji: Session loaded for %s" filename)))))
 
 (defun fuji--add-metadata-entry (content-id filename file-path &optional results-dir)
 
@@ -2133,8 +2267,12 @@ Choose extraction method:
             (org-mode)
             (insert "#+TITLE: Chat Session: " filename "\n\n")
             (insert "* Fuji System Log\n:PROPERTIES:\n:Created: " (format-time-string "[%Y-%m-%d %H:%M]") "\n:END:\n")
+            (insert ":LOGBOOK:\n")
             (insert "- [ ] Workflow started for " doc-type " document in mode: " (format "%s" mode) "\n")
-            (insert "- [ ] Waiting for document ingestion...\n")))
+            (insert "- [ ] Waiting for document ingestion...\n")
+            (insert ":END:\n\n")
+            (insert "* Discussion\n")
+            (insert "** ")))
         
         (fuji--setup-2-buffer-layout doc-buffer chat-buffer)
         (fuji--log "Workflow started for %s document in mode: %s" doc-type mode)
@@ -2187,7 +2325,9 @@ Choose extraction method:
                          (let ((be (gptel-get-backend fuji-gptel-backend)))
                            (when be (setq-local gptel-backend be))))
                        (when fuji-gptel-model
-                         (setq-local gptel-model fuji-gptel-model))
+                         (setq-local gptel-model (if (stringp fuji-gptel-model)
+                                                     (intern fuji-gptel-model)
+                                                   fuji-gptel-model)))
 
                        ;; Directives
                        (setq-local gptel-directives 
@@ -2197,16 +2337,29 @@ Choose extraction method:
 
                        ;; Initialize Mode and UI
                        (insert "* Session Started\n")
-                       (gptel-mode)
+                       (if (fboundp 'gptel-mode) (gptel-mode 1))
                        (fuji-mode 1)
+                       
+                       ;; Ensure hook is locally set for standard responses
+                       (add-hook 'gptel-post-response-functions #'fuji--gptel-response-handler nil t)
+                       
+                       ;; Ensure prompt prefix is set effectively
+                       (setq-local gptel-prompt-prefix-alist '((org-mode . "** ") (default . "** ")))
                        
                        ;; Hooks
                        (add-hook 'kill-buffer-hook #'fuji-save-session nil t)
                        (add-hook 'kill-buffer-hook #'fuji--cleanup-session nil t)
                        
-                       ;; Add Ingestion Log
-                       (insert "- [ ] Ingesting to RAG backend (Async)... (ID: " temp-id ")\n")
-                       (goto-char (point-max))
+                       ;; Add Ingestion Log safely
+                       (save-excursion
+                         (goto-char (point-min))
+                         (if (re-search-forward ":END:" nil t)
+                             (progn
+                               (backward-char 5) ;; Move before :END:
+                               (insert "- [ ] Ingesting to RAG backend (Async)... (ID: " temp-id ")\n"))
+                           ;; Fallback if drawer is somehow missing (unlikely)
+                           (goto-char (point-max))
+                           (insert "\n- [ ] Ingesting to RAG backend (Async)... (ID: " temp-id ")\n")))
                    
                    ;; Ensure Chat is Visible
                    (pop-to-buffer chat-buffer)
@@ -2293,6 +2446,8 @@ Choose extraction method:
              (if (string= doc-type "pdf")
                  (fuji--extract-pdf-text doc-file results-dir extraction-callback)
                (fuji--extract-binary-pandoc doc-file results-dir extraction-callback)))))))))
+
+
 
 (provide 'fuji)
 
