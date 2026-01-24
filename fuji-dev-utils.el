@@ -29,10 +29,10 @@ This is the proper way to reload Fuji after making changes to source files."
                                   (file-executable-p fuji-marker-executable))
                             "✅ Configured"
                           "❌ Not configured"))
-  (message "Bibliography: %s" (if (and fuji-bib-path 
-                                        (file-directory-p fuji-bib-path))
-                                   "✅ Configured"
-                                 "❌ Not configured"))
+  (message "Bib File: %s" (if (and fuji-bibtex-file 
+                                   (file-exists-p fuji-bibtex-file))
+                              "✅ Configured"
+                            "❌ Missing or Invalid"))
   (message "Cache: %s" (if (and fuji-cache-directory 
                                  (file-directory-p fuji-cache-directory))
                             "✅ Configured"

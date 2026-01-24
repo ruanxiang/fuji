@@ -43,6 +43,7 @@
 (require 'fuji-rag)
 (require 'fuji-rag-graphlit)
 (require 'fuji-configure)
+(require 'fuji-bib)
 
 (defgroup fuji nil
   "Customization group for Fuji."
@@ -69,7 +70,7 @@ Note: For processing single files, 'marker_single' is preferred."
                  file)
   :group 'fuji)
 
-(defcustom fuji-bib-path nil
+(defcustom fuji-bibtex-file nil
   "Directory where BibTeX files are stored."
   :type '(choice (const :tag "Not Set" nil)
                  directory)
@@ -173,7 +174,25 @@ At runtime (fuji-read), user can choose between pdftotext, LLM tool, or offline.
   :type '(choice (const :tag "Auto-detect" nil) file)
   :group 'fuji)
 
+(defcustom fuji-marker-executable nil
+  "Path to marker binary. Auto-detected if nil."
+  :type '(choice (const :tag "Auto-detect" nil) file)
+  :group 'fuji)
 
+(defcustom fuji-bibtex-file nil
+  "Path to the bibliography file (or directory)."
+  :type '(choice (const :tag "Unconfigured" nil) file)
+  :group 'fuji)
+
+(defcustom fuji-chrome-executable nil
+  "Path to Chrome/Chromium binary."
+  :type '(choice (const :tag "Auto-detect" nil) file)
+  :group 'fuji)
+
+(defcustom fuji-http-proxy nil
+  "HTTP Proxy URL (e.g. 127.0.0.1:7890)."
+  :type '(choice (const :tag "None" nil) string)
+  :group 'fuji)
 
 (defcustom fuji-originals-archive-dir nil
   "Directory to archive original files. 
@@ -312,9 +331,9 @@ Used for non-visual documents (DOCX, EPUB) where raw buffer is binary."
         
         ;; 2. Files
         (insert "\n[File Paths]\n")
-        (if (and fuji-bib-path (file-directory-p fuji-bib-path))
-            (insert (format "   [OK] Bib Directory: %s\n" fuji-bib-path))
-          (insert (format "   [FAIL] Bib Directory NOT FOUND: %s\n" fuji-bib-path)))
+        (if (and fuji-bibtex-file (file-exists-p fuji-bibtex-file))
+            (insert (format "   [OK] Bib File: %s\n" fuji-bibtex-file))
+          (insert (format "   [FAIL] Bib File NOT FOUND: %s\n" fuji-bibtex-file)))
 
         ;; 3. Credentials
         (insert "\n[Graphlit Credentials]\n")
@@ -360,8 +379,8 @@ Used for non-visual documents (DOCX, EPUB) where raw buffer is binary."
   (fuji-apply-proxy)
   (unless (and fuji-marker-executable
                (file-executable-p fuji-marker-executable)
-               fuji-bib-path
-               (file-directory-p fuji-bib-path)
+               fuji-bibtex-file
+               (file-exists-p fuji-bibtex-file)
                (fuji--get-mcp-connection))
     (when (y-or-n-p "Fuji is not configured. Configure it now? ")
       (call-interactively #'fuji-configure))))
@@ -412,10 +431,10 @@ Used for non-visual documents (DOCX, EPUB) where raw buffer is binary."
             (error "Graphlit Organization ID or Secret missing in auth-source")))
         
         ;; 3. Check Bib Path
-        (unless fuji-bib-path
+        (unless fuji-bibtex-file
           (error "Bibliography path not configured. Please run M-x fuji-configure"))
-        (unless (file-directory-p fuji-bib-path)
-          (error "Bibliography directory not found: %s" fuji-bib-path))
+        (unless (file-exists-p fuji-bibtex-file)
+          (error "Bibliography file not found: %s" fuji-bibtex-file))
 
         ;; 4. Ensure Cache exists
         (unless fuji-cache-directory
@@ -550,7 +569,7 @@ favoring bib-search integration if available."
    ;; 3. Manual selection (fallback)
    (t
     (let* ((file (read-file-name "Select document (or URL): " 
-                                (or fuji-bib-path default-directory) nil nil))
+                                (or fuji-bibtex-file default-directory) nil nil))
            (abs-path (expand-file-name (substitute-in-file-name (expand-file-name file))))
            (nondir (file-name-nondirectory (directory-file-name file)))) ;; handle trailing slash
       
@@ -1028,6 +1047,7 @@ This is used as a gptel tool in hybrid mode."
 (define-key fuji-mode-map (kbd "C-c n a") #'fuji-session-add-context)
 (define-key fuji-mode-map (kbd "C-c n s") #'fuji-mcp-manage)
 (define-key fuji-mode-map (kbd "C-c n q") #'fuji-quit)
+(define-key fuji-mode-map (kbd "C-c n b") #'fuji-add-bibtex-entry-from-doi)
 
 (define-minor-mode fuji-mode
   "Minor mode for Fuji chat buffers."
@@ -1094,10 +1114,13 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 (define-key fuji-library-mode-map (kbd "+") 'fuji-library-add-file)
 (define-key fuji-library-mode-map (kbd "a") 'fuji-library-add-file)
 (define-key fuji-library-mode-map (kbd "e") 'fuji-library-edit-title)
-(define-key fuji-library-mode-map (kbd "m") 'fuji-library-edit-memo)
+(define-key fuji-library-mode-map (kbd "b") 'fuji-library-add-bibtex)
+(define-key fuji-library-mode-map (kbd "t") 'fuji-library-edit-tags)
+(define-key fuji-library-mode-map (kbd "m") 'fuji-library-edit-tags)
 (define-key fuji-library-mode-map (kbd "s") #'fuji-library-search)
 (define-key fuji-library-mode-map (kbd "/") #'fuji-library-clear-search)
 (define-key fuji-library-mode-map (kbd "S") #'fuji-library-clear-search)
+(define-key fuji-library-mode-map (kbd "@") #'fuji-search-by-tag)
 (define-key fuji-library-mode-map (kbd "q") #'quit-window)
 
 (define-derived-mode fuji-library-mode tabulated-list-mode "Fuji-Library"
@@ -1106,7 +1129,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
   (setq tabulated-list-format
         [("I" 3 nil)  ; Icon
          ("Title" 40 t)
-         ("Memo" 30 nil)
+         ("Tags" 30 nil)
          ("ID" 12 nil)
          ("Date" 12 t)
          ("Size" 10 t)
@@ -1229,7 +1252,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                    (name (if metadata
                              (or (cdr (assoc 'title metadata)) (cdr (assoc 'filename metadata)))
                            (format "Content %s" (substring id 0 8))))
-                   (memo (or (and metadata (cdr (assoc 'memo metadata))) ""))
+                   (tags (or (and metadata (cdr (assoc 'tags metadata))) ""))
                    (date (if metadata
                              (let ((upload-date (cdr (assoc 'upload_date metadata))))
                                (if (stringp upload-date)
@@ -1255,7 +1278,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                            (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-book" :face '(:foreground "green")) "E"))
                           (t (if (fboundp 'nerd-icons-faicon) (nerd-icons-faicon "nf-fa-file_o") "?")))))
               ;; Ensure vector has exactly 7 elements to match tabulated-list-format
-              (list id (vector icon name memo id-short date size display-type))))
+              (list id (vector icon name tags id-short date size display-type))))
           (or content-list fuji--content-list))))
     (setq tabulated-list-entries entries)
     (tabulated-list-init-header)
@@ -1312,6 +1335,12 @@ Returns the path to the archived file, or nil if archiving fails."
       (error
        (message "Fuji: Failed to archive file %s: %s" file-path (error-message-string err))
        nil))))
+
+(defun fuji--is-path-in-library-p (file-path)
+  "Check if FILE-PATH is currently in the Fuji library (originals directory)."
+  (let ((lib-dir (expand-file-name (fuji--get-originals-dir)))
+        (path (expand-file-name file-path)))
+    (string-prefix-p lib-dir path)))
 
 (defun fuji--resolve-file-path (content-id)
   "Resolve file path for CONTENT-ID with fallback strategy.
@@ -1522,8 +1551,15 @@ Creates the directory if it doesn't exist."
                         (end-of-line)
                         (insert " overview")))
                   (goto-char (point-min))
-                  (insert "#+STARTUP: indent overview\n")))
-            ;; Default Header if no session
+                  (insert "#+STARTUP: indent overview\n"))
+
+                
+                ;; 4. Phase 1: Refresh Metadata (Deduplication Fix)
+                ;; Always force a refresh to ensure headings are unique and up-to-date
+                ;; This replaces the old inline insertion logic
+                (fuji--refresh-chat-metadata))
+
+                ;; Default Header if no session
             (insert "#+TITLE: Chat Session: " filename "\n"
                     "#+STARTUP: indent overview\n"
                     "#+PROPERTY: header-args :results silent\n\n"
@@ -1624,7 +1660,7 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
          (archived-path (fuji--archive-file file-path))
          (metadata `((filename . ,filename)
                      (title . ,filename)          ; NEW: Adjustable title, defaults to filename
-                     (memo . "")                  ; NEW: User notes
+                     (tags . "")                  ; NEW: User tags (was memo)
                      (file_hash . ,file-hash)     ; NEW: For duplicate detection
                      (upload_date . ,(format-time-string "%Y-%m-%dT%H:%M:%S"))
                      (file_size . ,(or file-size 0))
@@ -1667,6 +1703,62 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
          ;; Add new entry
          (updated-cache (cons (cons id-key new-metadata) clean-cache)))
     (fuji--save-metadata-cache updated-cache)))
+
+(defun fuji-migrate-memos-to-tags ()
+  "Migrate legacy 'memo' fields to 'tags' in all library metadata."
+  (interactive)
+  (let ((cache (fuji--load-metadata-cache))
+        (migrated-count 0))
+    (dolist (entry cache)
+      (let* ((metadata (cdr entry))
+             (memo (cdr (assoc 'memo metadata)))
+             (tags (cdr (assoc 'tags metadata))))
+        ;; Migrate if memo exists (and is not nil/empty) AND tags is nil/empty/missing
+        (when (and memo (not (string-empty-p memo))
+                   (or (not tags) (string-empty-p tags)))
+          (if (assoc 'tags metadata)
+              (setf (cdr (assoc 'tags metadata)) memo)
+            (nconc metadata (list (cons 'tags memo))))
+          ;; Clear AND REMOVE memo to allow proper cleanup
+          (if (assoc 'memo metadata)
+              (setf (cdr (assoc 'memo metadata)) nil))
+          (assq-delete-all 'memo metadata) ;; Hard delete
+          (cl-incf migrated-count))
+      ;; Also delete empty memos if they exist
+      (when (assoc 'memo metadata)
+        (assq-delete-all 'memo metadata))))
+    
+    (if (> migrated-count 0)
+        (progn
+          (fuji--save-metadata-cache cache)
+          (message "Fuji: Migrated %d documents from 'memo' to 'tags'." migrated-count))
+      (message "Fuji: No documents needed migration."))))
+
+(defun fuji--get-all-tags ()
+  "Return a list of all unique tags used across the library."
+  (let ((tags '())
+        (cache (fuji--load-metadata-cache)))
+    (message "DEBUG: Fuji Tag Collection - Cache size: %d" (length cache))
+    (dolist (entry cache)
+      (let* ((metadata (cdr entry))
+             (tag-str (or (cdr (assoc 'tags metadata)) ""))
+             (entry-tags (split-string tag-str "[,;：；\t]+" t " "))) ;; Split by common delimiters and trim
+        (when entry-tags
+           (message "DEBUG: Found tags in document %s: %s" (car entry) entry-tags))
+        (dolist (tag entry-tags)
+          (unless (member tag tags)
+            (push tag tags)))))
+    (message "DEBUG: Total unique tags: %d" (length tags))
+    (sort tags #'string<)))
+
+(defun fuji--normalize-tags (tag-str)
+  "Normalize TAG-STR: split by various delimiters and join with comma-space.
+Delimiters: comma, semicolon, colon, chinese comma/semicolon, tabs."
+  (if (string-blank-p tag-str)
+      ""
+    (let ((tags (split-string tag-str "[,;:：；\t]+" t " "))) ;; Split and trim whitespace around tokens
+      (mapconcat #'identity tags ", "))))
+
 
 
 (defun fuji--format-file-size (bytes)
@@ -1716,22 +1808,146 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
                 (fuji-library-refresh-current-line)))))
       (user-error "No document selected"))))
 
-(defun fuji-library-edit-memo ()
-  "Add or edit a memo for the selected document."
+(defun fuji-library-edit-tags ()
+  "Add or edit tags for the selected document with auto-completion."
   (interactive)
   (let* ((id (tabulated-list-get-id))
          (metadata (and id (fuji--get-metadata-for-id id)))
-         (current-memo (and metadata (or (cdr (assoc 'memo metadata)) ""))))
+         (current-tags (and metadata (or (cdr (assoc 'tags metadata)) 
+                                         "")))
+         (all-tags (fuji--get-all-tags)))
     (if id
-        (let ((new-memo (read-string "Memo: " current-memo)))
-          (when new-memo
-            (if (assoc 'memo metadata)
-                (setf (cdr (assoc 'memo metadata)) new-memo)
-              (nconc metadata (list (cons 'memo new-memo))))
-            (fuji--update-metadata-entry id metadata)
-            (message "Fuji: Memo updated")
-            (fuji-library-refresh-current-line)))
+        (let* ((crm-separator "[ \t]*,[ \t]*") ;; CRM separator for display
+               (selected-tags (completing-read-multiple 
+                               (format "Tags (current: %s): " current-tags)
+                               all-tags
+                               nil nil ;; Predicate required? No.
+                               current-tags ;; Initial input? No, messy with CRM. Use current as hint.
+                               ;; Better UX: Pre-populate history/default? 
+                               ;; CRM is tricky with 'initial-input if it's a list.
+                               ;; If we want to EDIT existing tags, read-string is better but no completion.
+                               ;; Hybrid: completing-read-multiple returns a LIST of strings.
+                               ))
+               ;; If user just hits RET, selected-tags might be empty list or ("").
+               ;; But wait! CRM with default doesn't quite work like read-string for *editing*.
+               ;; It's for *selecting*.
+               ;; Let's stick to the request: "Tip previously entered tags".
+               ;; If we use CRM, we are essentially re-selecting tags. 
+               ;; Let's allow arbitrary input by not requiring match.
+               (final-tag-str (mapconcat #'string-trim selected-tags ", ")))
+
+          ;; Wait, CRM is great for selecting multiple *existing* tags. 
+          ;; But if I want to add a *new* tag "NewTag", CRM allows it if REQUIRE-MATCH is nil.
+          ;; But I can't easily "edit" the string "Tag1, Tag2" -> "Tag1, Tag2, NewTag" in minibuffer 
+          ;; unless I pass it as initial input.
+          
+          ;; Refined approach: Use read-string with completion-at-point? No.
+          ;; Let's use CRM but be smart.
+          ;; Actually, the user asked for "Candidate hints".
+          ;; If we pass current-tags as INITIAL-INPUT to CRM?
+          ;; (completing-read-multiple PROMPT TABLE &optional PREDICATE REQUIRE-MATCH INITIAL-INPUT HIST DEF INHERIT-INPUT-METHOD)
+          
+          (let ((new-tags-list 
+                 (completing-read-multiple 
+                  "Tags: " 
+                  all-tags 
+                  nil 
+                  nil ;; Confirm: REQUIRE-MATCH = nil (allow new tags)
+                  current-tags ;; Initial input = current string (e.g. "AI, Agent")
+                  )))
+            
+            (when new-tags-list
+              ;; Join and normalize
+              (let ((normalized-tags (mapconcat #'identity new-tags-list ", ")))
+                
+                ;; Update tags
+                (if (assoc 'tags metadata)
+                    (setf (cdr (assoc 'tags metadata)) normalized-tags)
+                  (nconc metadata (list (cons 'tags normalized-tags))))
+                
+                ;; Clear old memo if exists AND DELETE IT
+                (when (assoc 'memo metadata)
+                  (assq-delete-all 'memo metadata))
+                
+                (fuji--update-metadata-entry id metadata)
+                (message "Fuji: Tags updated to '%s'" normalized-tags)
+                (fuji-library-refresh-current-line)))))
       (user-error "No document selected"))))
+
+(defun fuji-library-add-bibtex ()
+  "Add a BibTeX entry from DOI for the selected document."
+  (interactive)
+  (let* ((id (tabulated-list-get-id))
+         (metadata (and id (fuji--get-metadata-for-id id))))
+    (unless id
+      (user-error "No document selected"))
+    
+    (let ((doi (read-string "Enter DOI: "))
+          (file-path (or (cdr (assoc 'archived_path metadata))
+                         (cdr (assoc 'original_path metadata)))))
+      
+      (when (and file-path (not (file-name-absolute-p file-path)))
+        (setq file-path (expand-file-name file-path fuji-cache-directory)))
+
+      (when (and doi (not (string-empty-p doi)))
+        (message "Fuji: Fetching BibTeX for DOI %s..." doi)
+        (let ((key (fuji-add-bibtex-entry-from-doi doi file-path)))
+          (if key
+              (progn
+                ;; 1. Update Metadata
+                (if (assoc 'bib_key metadata)
+                    (setf (cdr (assoc 'bib_key metadata)) key)
+                  (nconc metadata (list (cons 'bib_key key))))
+                (fuji--update-metadata-entry id metadata)
+                
+                ;; 2. Update Session File Header
+                (fuji--update-session-bib-key id key)
+                
+                ;; 3. Refresh BibTeX Cache & UI
+                (when (fboundp 'bibtex-completion-clear-cache)
+                  (bibtex-completion-clear-cache))
+                
+                ;; If session is open, refresh it
+                (let ((session-buf (fuji--find-session-buffer id)))
+                  (when session-buf
+                    (with-current-buffer session-buf
+                      ;; Reload session logic to refresh metadata header
+                      (fuji--load-session id)))) ;; Quick revert to re-run fuji--load-session logic
+                
+                (message "Fuji: Linked BibTeX key '%s' to document." key))
+            (message "Fuji: Failed to find or add BibTeX entry.")))))))
+
+
+(defun fuji--find-session-buffer (id)
+  "Find the active session buffer for ID."
+  (cl-loop for buf in (buffer-list)
+           thereis (with-current-buffer buf
+                     (and (boundp 'fuji--content-id)
+                          (string= fuji--content-id id)
+                          buf))))
+
+(defun fuji--update-session-bib-key (id key)
+  "Update the session file for ID to include the BibTeX KEY.
+Safe for open buffers."
+  (message "DEBUG: update-session-bib-key called for ID %s Key %s" id key)
+  (let ((session-file (fuji--get-session-file id))
+        (active-buffer (fuji--find-session-buffer id)))
+    (if active-buffer
+        ;; If active session buffer exists (even if not visiting file), update it
+        (with-current-buffer active-buffer
+          (message "DEBUG: Found active buffer: %s" (current-buffer))
+          (fuji--set-bib-key-in-session key)
+          ;; Save via fuji-save-session to ensure disk sync
+          (fuji-save-session)
+          (message "DEBUG: Saved session buffer"))
+      ;; Fallback: Update file on disk directly
+      (message "DEBUG: No active buffer found. Checking file: %s" session-file)
+      (when (and session-file (file-exists-p session-file))
+        (with-current-buffer (find-file-noselect session-file)
+          (fuji--set-bib-key-in-session key)
+          (save-buffer)
+          (kill-buffer)
+          (message "DEBUG: Updated and saved file directly"))))))
 
 (defun fuji-library-add-file ()
   "Add a new file to the library (wrapper for `fuji-read`)."
@@ -1763,13 +1979,13 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
   "Filter the library buffer by QUERY.
 Supports multiple space-separated terms with AND logic.
 Prefixes:
-- t:TITLE (metadata title)
-- m:MEMO (metadata memo)
+- t:TAGS (metadata tags)
+- title:TITLE (metadata title)
 - type:TYPE (metadata file type)
 - No prefix: Full-text content search
 
-Example: 'type:pdf t:transformer attention' matches items that are PDFs AND have 'transformer' in title AND 'attention' in content."
-  (interactive "sSearch (t:Title m:Memo type:PDF content): ")
+Example: 'type:pdf t:research attention' matches items that are PDFs AND have 'research' tag AND 'attention' in content."
+  (interactive "sSearch (t:Tags title:Title type:PDF content): ")
   (if (string-blank-p query)
       (fuji-library-clear-search)
     (let* ((tokens (split-string query " " t))
@@ -1780,8 +1996,8 @@ Example: 'type:pdf t:transformer attention' matches items that are PDFs AND have
       ;; 1. Parse tokens
       (dolist (token tokens)
         (cond
-         ((string-prefix-p "t:" token) (push (cons 'title (substring token 2)) meta-filters))
-         ((string-prefix-p "m:" token) (push (cons 'memo (substring token 2)) meta-filters))
+         ((string-prefix-p "title:" token) (push (cons 'title (substring token 6)) meta-filters))
+         ((string-prefix-p "t:" token) (push (cons 'tags (substring token 2)) meta-filters))
          ((string-prefix-p "type:" token) (push (cons 'doc_type (substring token 5)) meta-filters))
          (t (push token content-terms))))
 
@@ -1794,7 +2010,10 @@ Example: 'type:pdf t:transformer attention' matches items that are PDFs AND have
                  (lambda (entry)
                    (let* ((id (cdr (assoc 'id entry)))
                           (metadata (fuji--get-metadata-for-id id))
-                          (val (or (cdr (assoc field metadata)) "")))
+                          ;; Handle tags fallback to memo for backward compatibility
+                          (val (if (eq field 'tags)
+                                   (or (cdr (assoc 'tags metadata)) (cdr (assoc 'memo metadata)) "")
+                                 (or (cdr (assoc field metadata)) ""))))
                      (string-match-p pattern val)))
                  filtered-entries))))
 
@@ -2053,7 +2272,14 @@ If the user asks about the remote documents (listed in the System header), use t
                       (progn
                         (delete-file session-file)
                         (message "Fuji: Deleted session file %s" session-file))
-                    (error (message "Fuji: Failed to delete session file: %s" err)))))))
+                    (error (message "Fuji: Failed to delete session file: %s" err))))
+                
+                ;; Delete BibTeX entry (if linked)
+                (let ((bib-key (cdr (assoc 'bib_key metadata))))
+                  (when bib-key
+                    (condition-case err
+                        (fuji-remove-bibtex-entry bib-key)
+                      (error (message "Fuji: Failed to delete BibTeX entry: %s" err))))))))
             
             ;; Remove from metadata cache
             (fuji--remove-metadata-entry id)
@@ -2192,12 +2418,30 @@ Choose extraction method:
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
   (let* ((raw-input (fuji--select-document))
-         ;; If input is a URL, convert it to PDF first
-         (doc-file (if (string-match-p "^https?://" raw-input)
-                       (progn
-                         (message "Fuji: Web URL detected. Converting to PDF...")
-                         (fuji--web-to-pdf raw-input temporary-file-directory))
-                     raw-input))
+         ;; If input is a URL, convert it to PDF first (in temp dir)
+         (initial-doc-file (if (string-match-p "^https?://" raw-input)
+                               (progn
+                                 (message "Fuji: Web URL detected. Converting to PDF...")
+                                 (fuji--web-to-pdf raw-input temporary-file-directory))
+                             raw-input))
+         
+         ;; ENFORCE LIBRARY POLICY:
+         ;; If file is NOT in library, prompt to import.
+         (doc-info 
+          (if (fuji--is-path-in-library-p initial-doc-file)
+              (cons initial-doc-file (file-name-nondirectory initial-doc-file))
+            ;; Not in library: Prompt
+            (if (y-or-n-p (format "File '%s' is not in Fuji library. Import it? " 
+                                  (file-name-nondirectory initial-doc-file)))
+                (let ((archived (fuji--archive-file initial-doc-file)))
+                  (unless archived (error "Failed to import file to library"))
+                  ;; Return (archived-path . original-filename)
+                  (cons archived (file-name-nondirectory initial-doc-file)))
+              (user-error "Aborted: Fuji only operates on library files."))))
+         
+         (doc-file (car doc-info))
+         (display-filename (cdr doc-info))
+
          ;; HASH CHECK: Check if file already exists in library
          (file-hash (when (file-exists-p doc-file) (secure-hash 'sha256 doc-file)))
          (existing-entry (when file-hash
@@ -2243,7 +2487,7 @@ Choose extraction method:
                          (error "Unsupported file type: %s" doc-file))))
              (mode-label (completing-read "Extraction method: " (mapcar #'car mode-map) nil t))
              (mode (cdr (assoc mode-label mode-map)))
-             (filename (file-name-nondirectory doc-file))
+             (filename display-filename) ;; Use preserved display name (from original)
              (results-dir (fuji--get-cache-path doc-file))
              (doc-buffer (cond
                           ((or (string= doc-type "pdf") (string= doc-type "text"))
@@ -2449,6 +2693,72 @@ Choose extraction method:
 
 
 
+
+(defun fuji--refresh-chat-metadata ()
+  "Refresh the * Paper Metadata drawer in the current chat buffer."
+  (interactive)
+  (save-excursion
+    (goto-char (point-min))
+    (let ((inhibit-read-only t)
+          (key (when (re-search-forward "^#\\+FUJI_BIB_KEY: \\(.*\\)$" nil t)
+                 (match-string 1))))
+      
+      ;; 1. Remove ALL existing metadata drawers (Deduplication)
+      ;; Use org-mode APIs if possible, or robust regex
+      (save-excursion
+        (goto-char (point-min))
+        ;; Unfold everything first to ensure regex matches hidden text
+        (ignore-errors (org-show-all))
+        (while (re-search-forward "^\\*+ Paper Metadata" nil t)
+          (let ((beg (match-beginning 0))
+                (end (save-excursion 
+                       (forward-line 1)
+                       ;; Search for next heading at same level or higher
+                       (if (re-search-forward "^\\* " nil t)
+                           (match-beginning 0)
+                         (point-max)))))
+            (delete-region beg end))))
+      
+      ;; 2. Re-insert if we have a key
+      (when key
+        ;; Fetch entry
+        (let* ((entry (or (and (fboundp 'bibtex-completion-get-entry)     
+                               (let ((bibtex-completion-bibliography (list fuji-bibtex-file)))
+                                 (bibtex-completion-get-entry key)))
+                          (fuji-get-bibtex-entry-direct key))))
+          (when entry
+            (goto-char (point-min))
+            ;; Find insertion point (after properties or before first headline)
+            (if (re-search-forward "^\\* " nil t)
+                (beginning-of-line)
+              (goto-char (point-max)))
+            
+            (insert "* Paper Metadata\n:PROPERTIES:\n:VISIBILITY: children\n:END:\n")
+            (insert (format "** %s\n" (or (cdr (assoc "title" entry)) "Untitled")))
+            (insert (format "- *Authors*: %s\n" (or (cdr (assoc "author" entry)) "Unknown")))
+            (insert (format "- *Year*: %s\n" (or (cdr (assoc "year" entry)) "N/A")))
+            (insert (format "- *Journal*: %s\n" (or (cdr (assoc "journal" entry)) 
+                                                    (cdr (assoc "booktitle" entry)) "N/A")))
+            (insert (format "- *DOI*: [[https://doi.org/%s][%s]]\n" 
+                            (or (cdr (assoc "doi" entry)) "") 
+                            (or (cdr (assoc "doi" entry)) "Link")))
+            (insert "\n")
+            (message "Fuji: Metadata refresh complete for key '%s'" key)))))))
+
+(defun fuji--after-add-bibtex-entry-wrapper (key &rest args)
+  "Advice to link KEY to the current session after `fuji-add-bibtex-entry-from-doi`.
+This ensures that when a user adds a specific DOI while reading a paper,
+the session is permanently linked to that new BibTeX entry."
+  ;; Check if we are in a Fuji session (fuji--content-id is bound)
+  (when (and key (bound-and-true-p fuji--content-id))
+    (message "Fuji: Automatically linking session to new BibTeX Key: %s" key)
+    (fuji--set-bib-key-in-session key)
+    (fuji--refresh-chat-metadata))
+  key)
+
+(advice-add 'fuji-add-bibtex-entry-from-doi :filter-return #'fuji--after-add-bibtex-entry-wrapper)
+
 (provide 'fuji)
+(require 'fuji-search)
 
 ;;; fuji.el ends here

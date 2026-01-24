@@ -139,6 +139,12 @@ Returns a plist with selections."
   (message "")
   (message "At runtime (fuji-read), you can choose which tool to use.")
   (message "")
+  
+  (if (featurep 'doi-utils)
+      (message "Org-Ref Integration: ✅ Detected (doi-utils loaded)")
+    (message "Org-Ref Integration: ❌ Not detected (install org-ref for BibTeX features)"))
+
+  (message "")
   (message "RAG/MCP Backend (for knowledge retrieval):")
   (message "  - graphlit: Cloud-based RAG via MCP (requires credentials)")
   (message "  - local-vector: Future local vector database option")
@@ -258,13 +264,13 @@ Returns an alist of configured items to be saved."
     (when (string= (or (bound-and-true-p fuji-rag-backend-name) "") "graphlit")
       (setq config-items (append config-items (fuji-configure-graphlit))))
     
-    ;; Bibliography directory
-    (let ((bib-dir (read-directory-name 
-                    "Bibliography Directory (where your PDFs are stored): "
-                    (or (bound-and-true-p fuji-bib-path)
+    ;; Bibliography file
+    (let ((bib-file (read-file-name 
+                    "Bibliography File (your main .bib file): "
+                    (or (and (bound-and-true-p fuji-bibtex-file) (file-name-directory fuji-bibtex-file))
                         (expand-file-name "~/Documents/Papers/"))
                     nil t)))
-      (push (cons 'fuji-bib-path (expand-file-name bib-dir)) config-items))
+      (push (cons 'fuji-bibtex-file (expand-file-name bib-file)) config-items))
     
     ;; Cache and archive directories
     (let* ((cache-dir (read-directory-name 

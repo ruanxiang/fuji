@@ -1,23 +1,23 @@
-# Fuji (负笈) - Your Digital Library
+# Fuji (负笈) - 您的数字藏书阁
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Nexus-Paper** is a high-fidelity, multimodal research assistant integrated directly into Emacs. It bridges the gap between static PDFs and intelligent AI interaction by orchestrating state-of-the-art parsing, semantic RAG, and multimodal vision analysis.
+**Fuji (负笈)** 是一款直接集成于 Emacs 的高保真、多模态研读助手。它通过编排最先进的解析技术、语义 RAG（检索增强生成）和多模态视觉分析，弥合了静态 PDF 与智能 AI 交互之间的鸿沟。
 
 ---
 
-## 🚀 The Vision
+## 🚀 愿景
 
-Reading academic papers should feel like a conversation, not a chore. Nexus-Paper transforms your local PDF library into a living knowledge base where:
+阅读学术论文应该像是一场对话，而不是一种负担。Fuji 将您的本地 PDF 库转化为一个鲜活的知识库，在这里：
 
-- **Text** is parsed with high fidelity (formulas, tables, and structures preserved).
-- **Figures** are not just seen, but understood in context.
-- **Insights** are retrieved instantly using modern RAG techniques.
-- **Workflow** is seamless, leveraging your existing `org-ref` and `gptel` setup.
+- **文本** 被高保真解析（保留公式、表格和结构）。
+- **图表** 不仅被看见，更能被结合上下文理解。
+- **洞察** 通过现代 RAG 技术即时获取。
+- **工作流** 无缝衔接，利用您现有的 `org-ref` 和 `gptel` 配置。
 
-## 🏗️ Architecture
+## 🏗️ 架构
 
-Nexus-Paper is built on a **Pluggable Provider Architecture**, ensuring that as the AI landscape evolves, your tools can evolve with it.
+Fuji 基于 **可插拔提供者架构 (Pluggable Provider Architecture)** 构建，确保随着 AI 领域的发展，您的工具也能随之进化。
 
 ```mermaid
 graph TD
@@ -31,38 +31,38 @@ graph TD
     H --> F
 ```
 
-## 🌟 Key Features
+## 🌟 核心特性
 
-- **High-Fidelity Parsing**: Integration with [Marker](https://github.com/VikParuchuri/marker) for converting complex PDFs into structured Markdown with extracted figures.
-- **Intelligent RAG**: Seamless integration with [Graphlit](https://www.graphlit.com/) for cloud-based Retrieval-Augmented Generation.
-- **Multi-Brain Dispatcher**: An intelligent orchestration layer that routes visual queries (e.g., "Explain Figure 3") to multimodal models while providing them with textual context from the RAG backend.
-- **Programmatic Orchestration**: Automatically configures `gptel` settings (models, backends, system prompts) based on the session context.
-- **Privacy-Conscious Cleanup**: Just-in-time uploads with persistent local caching and automatic cleanup of cloud data.
+- **高保真解析**: 集成 [Marker](https://github.com/VikParuchuri/marker)，将复杂的 PDF 转换为结构化的 Markdown 并提取图表。
+- **智能 RAG**: 与 [Graphlit](https://www.graphlit.com/) 无缝集成，实现基于云端的检索增强生成。
+- **多脑调度器**: 一个智能编排层，能够将视觉查询（例如“解释图 3”）路由至多模态模型，同时从 RAG 后端提供文本上下文。
+- **编程化编排**: 根据会话上下文自动配置 `gptel` 设置（模型、后端、系统提示词）。
+- **隐私感知的清理**: 仅在需要时上传，支持持久化本地缓存和云端数据的自动清理。
 
-## 🛠️ Prerequisites
+## 🛠️ 前置要求
 
 - **Emacs 29+**
-- **Marker**: Installed in a local Python environment.
+- **Marker**: 在本地 Python 环境中安装。
   > [!IMPORTANT]
-  > First-time use of Marker requires downloading models (~数GB), which can take a long time and significant bandwidth. It is highly recommended to run Marker at least once from the terminal (`marker /path/to/any.pdf --output_dir /tmp/test`) to ensure models are cached before using it within Emacs.
-- **Google Chrome / Chromium**: Required for Web Document support (Headless mode).
+  > 首次使用 Marker 需要下载模型（约数 GB），这可能需要较长时间和大量带宽。强烈建议先在终端运行一次 Marker (`marker /path/to/any.pdf --output_dir /tmp/test`)，以确保在 Emacs 中使用前模型已缓存就绪。
+- **Google Chrome / Chromium**: Web 文档支持所需（无头模式）。
   > [!TIP]
-  > Fuji can auto-detect your Chrome installation, or you can specify the path in `fuji-configure`.
-- **Graphlit Account**: API Organization ID and Secret.
-- **gptel**: For the LLM frontend.
-- **org-ref / citar**: For literature management.
+  > Fuji 可以自动检测您的 Chrome 安装，或者您可以在 `fuji-configure` 中指定路径。
+- **Graphlit 账户**: 需要 API 多织 ID (Organization ID) 和 Secret。
+- **gptel**: 用于 LLM 前端。
+- **org-ref / citar**: 用于文献管理。
 
-## 📦 Installation & Setup
+## 📦 安装与设置
 
-1. Clone the repository.
-2. Add to your `load-path` and `(require 'fuji)`.
-3. **First-time Setup**: Run `M-x fuji-configure` to set your Marker path and Bibliography directory. These settings will be saved to your Emacs custom file.
-4. **Credentials**: Ensure your Graphlit Organization ID and Secret are in your `~/.authinfo` or `~/.authinfo.gpg`:
+1. 克隆本仓库。
+2. 将其添加到您的 `load-path` 并 `(require 'fuji)`.
+3. **首次设置**: 运行 `M-x fuji-configure` 设置您的 Marker 路径和参考文献目录。这些设置将保存到您的 Emacs custom 文件中。
+4. **凭据**: 确保您的 Graphlit Organization ID 和 Secret 已配置在 `~/.authinfo` 或 `~/.authinfo.gpg` 中：
 
     ```text
     machine graphlit login YOUR_ORG_ID password YOUR_SECRET
     ```
 
-## ⚖️ License
+## ⚖️ 许可证
 
-Distributed under the **MIT License**. See `LICENSE` for more information.
+基于 **MIT License** 分发。详见 `LICENSE` 文件。
