@@ -111,7 +111,7 @@ graph TD
 Fuji keeps your data local and organized in `~/.emacs.d/fuji-cache/` (configurable):
 
 ```text
-```
+
 .
 ├── originals/           # Your actual library (PDFs, EPUBs) - Synced here
 ├── <SHA256-HASH>/       # Cached text & images for File A (e.g., "a1b2...")
