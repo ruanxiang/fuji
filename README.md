@@ -1,68 +1,165 @@
-# Fuji (负笈) - 您的数字藏书阁
+# 🗻 Fuji (Fùjí)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Fuji (负笈)** 是一款直接集成于 Emacs 的高保真、多模态研读助手。它通过编排最先进的解析技术、语义 RAG（检索增强生成）和多模态视觉分析，弥合了静态 PDF 与智能 AI 交互之间的鸿沟。
+**Fuji (负笈)** is your **Personal Digital Library** and intelligent reading assistant, natively integrated into Emacs. 
+While it started as a tool for reading academic papers, it has evolved into a comprehensive system for managing and interacting with your entire digital knowledge base—whether it's papers, novels, technical books, personal notes, or **Web URLs** (which are automatically downloaded and preserved as PDFs).
 
 ---
 
-## 🚀 愿景
+## 📖 The Name "Fùjí"
 
-阅读学术论文应该像是一场对话，而不是一种负担。Fuji 将您的本地 PDF 库转化为一个鲜活的知识库，在这里：
+The name is a double entendre bridging Eastern heritage and modern aspiration:
 
-- **文本** 被高保真解析（保留公式、表格和结构）。
-- **图表** 不仅被看见，更能被结合上下文理解。
-- **洞察** 通过现代 RAG 技术即时获取。
-- **工作流** 无缝衔接，利用您现有的 `org-ref` 和 `gptel` 配置。
+1.  **Fùjí (负笈)**: A classical Chinese idiom meaning *"to travel with a book box on one's back to seek knowledge."* It symbolizes the scholar's lifelong journey of accumulating wisdom. Fuji is that digital "book box"—holding your entire library, always with you.
+2.  **Mount Fuji (富士山)**: Sharing the pronunciation, it represents the "mountain of papers" researchers face, and the high vantage point this tool provides.
 
-## 🏗️ 架构
+---
 
-Fuji 基于 **可插拔提供者架构 (Pluggable Provider Architecture)** 构建，确保随着 AI 领域的发展，您的工具也能随之进化。
+## � Why Fuji?
+
+Fuji fills a unique niche by combining the strengths of traditional library managers with cutting-edge AI:
+
+| Feature | Calibre | NotebookLM | **Fuji** |
+| :--- | :--- | :--- | :--- |
+| **Core Function** | E-book Management | AI Note-taking | **AI-Native Digital Library** |
+| **Management** | ✅ Excellent | ❌ Limited | **✅ Powerful (Tagging, Search)** |
+| **Reading** | ✅ Standard Reader | ✅ Summaries | **✅ AI-Assisted Deep Reading** |
+| **AI Interaction** | ❌ None | ✅ Chat w/ Sources | **✅ Chat w/ Library (RAG)** |
+| **Platform** | GUI App | Web App | **Emacs (Text-Centric)** |
+
+### What Makes Fuji Unique?
+
+1.  **Academic & Research First**: Unlike general readers, Fuji is optimized for researchers. Manage BibTeX automatically, chat to understand complex papers, and seamlessly insert citations while you write.
+2.  **Your Personal Knowledge Base**: As you add documents, Fuji grows smarter. It doesn't just read one file; it understands your entire library. You can chat with your knowledge base to synthesize ideas across papers, novels, and notes.
+3.  **Emacs Native (The Power of Text)**:
+    *   **Universal Text Engine**: Whether source files are PDFs, DOCX, EPUB, or images, Fuji converts them to pure text for AI processing. This makes interaction fast, lightweight, and flexible.
+    *   **Keyboard Driven**: Manage thousands of documents with simple, efficient Emacs keybindings.
+    *   **Pluggable Architecture**: Completely modular. Swap out text extractors (Marker, PyMuPDF), RAG backends (Graphlit, local vector DB), or LLM providers (OpenAI, Claude, DeepSeek via `gptel`) at will.
+
+---
+
+## 🏗️ System Architecture
+
+Fuji is designed as a modular, local-first system that orchestrates external AI services through Emacs.
 
 ```mermaid
 graph TD
-    A[PDF Selection via org-ref] --> B{Parser Layer}
-    B -- Default: Marker --> C[Markdown + High-Res Assets]
-    C --> D{RAG Backend}
-    D -- Default: Graphlit --> E[Semantic Search / Chat]
-    E --> F[gptel Interface]
-    F --> G[Multimodal Dispatcher]
-    G -- Visual Query Detected --> H[Vision API + Local Figures]
-    H --> F
+    %% Nodes
+    User(["User (Emacs)"])
+    subgraph "Fuji Core (Emacs Lisp)"
+        Manager[Library Manager]
+        Session[Reading Session]
+        Cite[Citation Engine]
+    end
+    
+    subgraph "Local Storage"
+        Files[(Original Documents)]
+        Cache[(Text/Image Cache)]
+        BibTeX[(BibTeX DB)]
+    end
+
+    subgraph "Pluggable Backend"
+        Extractor[Text Extractor]
+        RAG[RAG Service]
+        LLM[LLM Interface]
+    end
+
+    %% Edges
+    User <-->|M-x fuji-manage-content| Manager
+    User <-->|M-x fuji-read| Session
+    User <-->|M-x fuji-insert-citation| Cite
+
+    %% Data Flow: Ingestion (One-time)
+    Manager -->|1. Save File| Files
+    Manager -.->|2. Extract| Extractor
+    Extractor -.->|3. Cache Text| Cache
+    Extractor -.->|4. Index| RAG
+
+    %% Data Flow: Reading (Runtime)
+    Files ===|User Views| Session
+    Cache -->|AI Context| Session
+    RAG <-->|AI Retrieval| Session
+    Session <-->|Chat| LLM
+    
+    %% Citation
+    Cite -->|Fuzzy Search| Cache
+    Cite -->|Metadata| BibTeX
+    Manager <--> BibTeX
+
+    %% Styles
+    classDef core fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef storage fill:#ff9,stroke:#333;
+    classDef plug fill:#9cf,stroke:#333;
+    
+    class Manager,Session,Cite core;
+    class Files,Cache,BibTeX storage;
+    class Extractor,RAG,LLM plug;
 ```
 
-## 🌟 核心特性
+*   **Core**: The Emacs Lisp layer handles UI, workflow logic, and state management.
+*   **Storage**: 
+    *   **Originals**: Your actual files (PDF/DOCX) are stored safely (e.g., `~/.fuji/originals/`).
+    *   **Cache**: Fuji processes text once and caches it (in hash-based folders) for efficient AI interaction.
+*   **Pluggable Backend**:
+    *   **Extractor**: Defaults to `marker` (AI-powered) or `pdftotext`. Also supports `pandoc` (for DOCX/EPUB) and `chromium` (for Web URLs).
+    *   **RAG**: Currently supports `Graphlit`; local vector support planned.
+    *   **LLM**: Connects to OpenAI, Anthropic, Gemini, DeepSeek, etc., via `gptel`.
 
-- **高保真解析**: 集成 [Marker](https://github.com/VikParuchuri/marker)，将复杂的 PDF 转换为结构化的 Markdown 并提取图表。
-- **智能 RAG**: 与 [Graphlit](https://www.graphlit.com/) 无缝集成，实现基于云端的检索增强生成。
-- **多脑调度器**: 一个智能编排层，能够将视觉查询（例如“解释图 3”）路由至多模态模型，同时从 RAG 后端提供文本上下文。
-- **编程化编排**: 根据会话上下文自动配置 `gptel` 设置（模型、后端、系统提示词）。
-- **隐私感知的清理**: 仅在需要时上传，支持持久化本地缓存和云端数据的自动清理。
+### 📂 Data Structure
 
-## 🛠️ 前置要求
+Fuji keeps your data local and organized in `~/.emacs.d/fuji-cache/` (configurable):
 
-- **Emacs 29+**
-- **Marker**: 在本地 Python 环境中安装。
-  > [!IMPORTANT]
-  > 首次使用 Marker 需要下载模型（约数 GB），这可能需要较长时间和大量带宽。强烈建议先在终端运行一次 Marker (`marker /path/to/any.pdf --output_dir /tmp/test`)，以确保在 Emacs 中使用前模型已缓存就绪。
-- **Google Chrome / Chromium**: Web 文档支持所需（无头模式）。
-  > [!TIP]
-  > Fuji 可以自动检测您的 Chrome 安装，或者您可以在 `fuji-configure` 中指定路径。
-- **Graphlit 账户**: 需要 API 多织 ID (Organization ID) 和 Secret。
-- **gptel**: 用于 LLM 前端。
-- **org-ref / citar**: 用于文献管理。
+```text
+```
+.
+├── originals/           # Your actual library (PDFs, EPUBs) - Synced here
+├── <SHA256-HASH>/       # Cached text & images for File A (e.g., "a1b2...")
+├── <SHA256-HASH>/       # Cached text & images for File B
+├── sessions/            # Chat history (saved as .org files)
+└── metadata.json        # The database (fast lookup index)
+```
 
-## 📦 安装与设置
+> **🌍 Portable & Cloud-Ready**: Because Fuji is purely file and text-based (no complex databases), your library is **100% portable**. You can place this directory in **Dropbox, iCloud, Google Drive, or a home server**.
+>
+> Simply point `fuji-cache-directory` to this location on any machine, and your entire knowledge base—original files, AI context, chat history, and metadata—is instantly restored. **Zero lock-in, seamless sharing.**
 
-1. 克隆本仓库。
-2. 将其添加到您的 `load-path` 并 `(require 'fuji)`.
-3. **首次设置**: 运行 `M-x fuji-configure` 设置您的 Marker 路径和参考文献目录。这些设置将保存到您的 Emacs custom 文件中。
-4. **凭据**: 确保您的 Graphlit Organization ID 和 Secret 已配置在 `~/.authinfo` 或 `~/.authinfo.gpg` 中：
+---
 
-    ```text
-    machine graphlit login YOUR_ORG_ID password YOUR_SECRET
-    ```
+## 🔄 The 4-Pillar Workflow
 
-## ⚖️ 许可证
+Fuji streamlines your entire knowledge lifecycle through four integrated workflows:
 
-基于 **MIT License** 分发。详见 `LICENSE` 文件。
+### 1. Document Management 🗂️
+Turn existing folders into a structured library.
+*   **Ingest Anything**: Add PDF, DOCX, XLSX, EPUB, Image files, or **Web URLs** (auto-converted to PDF for permanent archiving).
+*   **Organize**: Edit titles, tags, and metadata instantly.
+*   **BibTeX Sync**: Automatically generating and managing BibTeX entries for academic papers.
+*   **Search**: Retrieve documents in milliseconds using fuzzy search or tag filtering.
+
+### 2. Intelligent Reading 🧠
+Deep reading with an AI copilot.
+*   **Instant Access**: Open any document from your library with a few keystrokes.
+*   **Contextual Chat**: Chat with the document side-by-side. Ask for summaries, clarification on formulas, or connections to other work.
+*   **Persistent Memory**: All conversations are saved. Resume your dialogue with a paper months later without losing context.
+*   **Anywhere Access**: Launch reading mode on *any* file in Emacs, even outside the library.
+
+### 3. Unified Citation (Exciting!) ✍️
+Write efficiently without breaking flow.
+*   **Full-Text Citation Search**: When writing in Org-mode or LaTeX, search for citations not just by title/author, but by **content**.
+*   **Fuzzy Matching**: Remember a concept but forgot the paper? Type a keyword, and Fuji finds the source and inserts the correct BibTeX key (`[cite:@key]`).
+
+### 4. Knowledge Base Chat 💬
+Conversation with your digital "Book Box".
+*   **Synthesis**: Don't just talk to one book. Talk to your library. "What do my saved papers say about Transformer architectures?"
+*   **Personalized AI**: The more you store, the better it understands your specific background and interests, providing increasingly tailored answers.
+
+---
+
+## 🛠️ Installation & Setup
+
+Please refer to [SETUP.md](./SETUP.md) for detailed installation instructions and [usage_guide.md](./usage_guide.md) for a step-by-step walkthrough.
+
+---
+
+*Fuji is capable of connecting to almost any LLM in the world via `gptel`, ensuring your "Book Box" is always powered by the smartest minds.*

@@ -1048,6 +1048,7 @@ This is used as a gptel tool in hybrid mode."
 (define-key fuji-mode-map (kbd "C-c n s") #'fuji-mcp-manage)
 (define-key fuji-mode-map (kbd "C-c n q") #'fuji-quit)
 (define-key fuji-mode-map (kbd "C-c n b") #'fuji-add-bibtex-entry-from-doi)
+(define-key fuji-mode-map (kbd "C-c n i") #'fuji-insert-citation)
 
 (define-minor-mode fuji-mode
   "Minor mode for Fuji chat buffers."
