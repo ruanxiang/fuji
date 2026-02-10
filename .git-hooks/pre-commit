@@ -1,0 +1,48 @@
+#!/bin/bash
+# Git pre-commit hook to validate Emacs Lisp files
+# Install: cp .git-hooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+# Get list of staged .el files
+STAGED_EL_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.el$')
+
+if [ -z "$STAGED_EL_FILES" ]; then
+    # No .el files staged, allow commit
+    exit 0
+fi
+
+echo "Validating staged Emacs Lisp files..."
+
+HAS_ERROR=0
+
+for FILE in $STAGED_EL_FILES; do
+    echo ""
+    echo "Checking: $FILE"
+    
+    # Run validation script
+    if [ -f "./validate-elisp.sh" ]; then
+        if ! ./validate-elisp.sh "$FILE"; then
+            HAS_ERROR=1
+        fi
+    else
+        # Fallback: simple bracket count
+        OPEN=$(grep -o '(' "$FILE" | wc -l)
+        CLOSE=$(grep -o ')' "$FILE" | wc -l)
+        if [ $OPEN -ne $CLOSE ]; then
+            echo "❌ $FILE: Unbalanced parentheses ($OPEN opening, $CLOSE closing)"
+            HAS_ERROR=1
+        else
+            echo "✅ $FILE: Brackets balanced"
+        fi
+    fi
+done
+
+if [ $HAS_ERROR -eq 1 ]; then
+    echo ""
+    echo "❌ Commit aborted: Fix syntax errors in .el files"
+    echo "   Run './validate-elisp.sh <file>' to check individual files"
+    exit 1
+fi
+
+echo ""
+echo "✅ All Emacs Lisp files validated successfully"
+exit 0

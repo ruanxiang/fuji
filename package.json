@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "graphlit-mcp-server": "^1.0.20251204001"
+  }
+}
