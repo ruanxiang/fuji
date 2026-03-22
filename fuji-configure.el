@@ -74,16 +74,13 @@ CONFIG-ALIST is an alist of (symbol . value) pairs."
     (insert ";; DO NOT edit manually\n")
     (insert ";; DO NOT sync to cloud (add to .gitignore)\n\n")
     (dolist (item config-alist)
-      (insert (format "(setq %s %S)\n" (car item) (cdr item))))
+      (insert (format "(setq %s '%S)\n" (car item) (cdr item))))
     (insert "\n;;; fuji-local-config.el ends here\n"))
   (message "Fuji: Configuration saved to %s" fuji-local-config-file))
 
-(defun fuji-migrate-config ()
-  "Migrate configuration from custom-file to local config file.
-This is a one-time migration for existing users."
-  (interactive)
+(defun fuji--get-current-config-alist ()
+  "Return an alist of all currently bound Fuji configuration variables."
   (let ((config-items '()))
-    ;; Extract current values if they exist
     (when (boundp 'fuji-marker-executable)
       (push (cons 'fuji-marker-executable fuji-marker-executable) config-items))
     (when (boundp 'fuji-pdftotext-executable)
@@ -114,7 +111,22 @@ This is a one-time migration for existing users."
       (push (cons 'fuji-gptel-vision-model fuji-gptel-vision-model) config-items))
     (when (boundp 'fuji-chrome-executable)
       (push (cons 'fuji-chrome-executable fuji-chrome-executable) config-items))
-    
+    (when (boundp 'fuji-bibtex-file)
+      (push (cons 'fuji-bibtex-file fuji-bibtex-file) config-items))
+    (nreverse config-items)))
+
+(defun fuji--update-persistent-config ()
+  "Update the local configuration file with the current in-memory variable state."
+  (let ((config-items (fuji--get-current-config-alist)))
+    (if config-items
+        (fuji--save-local-config config-items)
+      (message "Fuji: Warning, no configuration found to persist."))))
+
+(defun fuji-migrate-config ()
+  "Migrate configuration from custom-file to local config file.
+This is a one-time migration for existing users."
+  (interactive)
+  (let ((config-items (fuji--get-current-config-alist)))
     (if config-items
         (progn
           (fuji--save-local-config config-items)

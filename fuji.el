@@ -544,9 +544,9 @@ This checks the actual file content, not just the extension."
     (condition-case nil
         (with-temp-buffer
           (insert-file-contents file-path nil 0 1024) ; Read first 1KB
-          ;; Check if buffer contains only printable characters
+          ;; Check if buffer contains NUL bytes (binary footprint)
           (goto-char (point-min))
-          (not (re-search-forward "[^[:print:]\n\r\t]" nil t)))
+          (not (re-search-forward "\x00" nil t)))
       (error nil))))
 
 (defun fuji--select-document ()
@@ -1047,27 +1047,37 @@ This is used as a gptel tool in hybrid mode."
 (define-key fuji-mode-map (kbd "C-c n a") #'fuji-session-add-context)
 (define-key fuji-mode-map (kbd "C-c n s") #'fuji-mcp-manage)
 (define-key fuji-mode-map (kbd "C-c n q") #'fuji-quit)
+(define-key fuji-mode-map (kbd "C-c n r") #'fuji-retry-current-ingestion)
 (define-key fuji-mode-map (kbd "C-c n b") #'fuji-add-bibtex-entry-from-doi)
 (define-key fuji-mode-map (kbd "C-c n i") #'fuji-insert-citation)
-
+(define-key fuji-mode-map (kbd "C-c n p") #'fuji-prompt-insert)
+(define-key fuji-mode-map (kbd "C-c n e") #'fuji-chat-export-to-library)
 (define-minor-mode fuji-mode
   "Minor mode for Fuji chat buffers."
   :lighter " Nexus"
   :keymap fuji-mode-map)
 
 (defun fuji-session-set-model ()
-  "Interactively set the gptel model and backend for the current Nexus session."
+  "Interactively set the gptel model and backend for the current Nexus session, and persist to config."
   (interactive)
   (let* ((backends gptel--known-backends)
          (backend-name (completing-read "Select Backend: " 
                                         (mapcar (lambda (b) (gptel-backend-name (cdr b))) 
                                                 backends)))
          (backend (gptel-get-backend backend-name))
-         (model (completing-read "Select Model: " (gptel-backend-models backend))))
+         (model-str (completing-read "Select Model: " (gptel-backend-models backend)))
+         (model (intern model-str)))
+    ;; Local session update
     (setq-local gptel-backend backend)
     (setq-local gptel-model model)
-    (fuji--log "Model updated to %s (%s)" model backend-name)
-    (message "Fuji: Model set to %s" model)))
+    ;; Global sync and persistence
+    (setq fuji-gptel-backend backend-name)
+    (setq fuji-gptel-model model)
+    (if (fboundp 'fuji--update-persistent-config)
+        (fuji--update-persistent-config)
+      (message "Fuji: Persistent config function not loaded yet. Restart Emacs or reload fuji-configure.el. Selected model: %s" model))
+    (fuji--log "Model updated to %s (%s) and persisted." model backend-name)
+    (message "Fuji: Model set to %s and saved permanently" model)))
 
 (defun fuji-session-add-context ()
   "Interactively add a file as context to the current Nexus session."
@@ -1111,6 +1121,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 (define-key fuji-library-mode-map (kbd "U") 'fuji-library-unmark-all)
 (define-key fuji-library-mode-map (kbd "W") 'fuji-library-chat-with-group)
 (define-key fuji-library-mode-map (kbd "x") 'fuji-library-execute)
+(define-key fuji-library-mode-map (kbd "r") 'fuji-library-retry-ingestion)
 (define-key fuji-library-mode-map (kbd "RET") 'fuji-library-open-session)
 (define-key fuji-library-mode-map (kbd "+") 'fuji-library-add-file)
 (define-key fuji-library-mode-map (kbd "a") 'fuji-library-add-file)
@@ -1223,14 +1234,15 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
                       for id-raw = (car entry)
                       for id = (format "%s" id-raw) ;; Ensure ID is string
                       for meta = (cdr entry)
-                      when (string-prefix-p "LOCAL-" id)
+                      when (or (string-prefix-p "LOCAL-" id)
+                                (string-prefix-p "PENDING-" id))
                       collect
                       `((id . ,id)
-                        (name . ,(or (alist-get 'filename meta) "Unknown Local File"))
+                        (name . ,(or (alist-get 'filename meta) "Unknown File"))
                         (createdDate . ,(or (alist-get 'upload_date meta) 
                                             (format-time-string "%Y-%m-%dT%H:%M:%SZ")))
                         (fileSize . 0) ;; Local file size logic can be added later
-                        (state . "LOCAL")))))
+                        (state . ,(if (string-prefix-p "PENDING-" id) "PENDING" "LOCAL"))))))
        ;; Merge lists (Local + RAG)
        (setq fuji--content-list (append local-entries rag-contents))
        
@@ -1647,11 +1659,13 @@ If RESULTS-DIR is provided, it is stored to allow deleting extracted content lat
          (file-size (and (file-exists-p file-path) 
                          (file-attribute-size (file-attributes file-path))))
          ;; Determine document type from extension
+         (ext (file-name-extension file-path))
          (doc-type (cond
                     ((string-match-p "\\.pdf$" file-path) "pdf")
                     ((string-match-p "\\.docx?$" file-path) "docx")
                     ((string-match-p "\\.epub$" file-path) "epub")
                     ((string-match-p "\\.html?$" file-path) "html")
+                    (ext (downcase ext))
                     (t "unknown")))
          ;; Calculate hash and archive
          ;; Re-calculate hash here to ensure it's stored in metadata even if already archived
@@ -2093,6 +2107,25 @@ Example: 'type:pdf t:research attention' matches items that are PDFs AND have 'r
       (message "No details available"))))
 
 
+(defun fuji-chat-export-to-library (title)
+  "Export the current chat buffer to the Fuji library as an Org file.
+Prompts for a TITLE, saves the current buffer to a temporary file,
+ingests it into Fuji via `fuji-read`, and deletes the temp file."
+  (interactive "sEnter title for this chat export: ")
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Current buffer is not in Org mode!"))
+  (when (string-blank-p title)
+    (user-error "Title cannot be empty!"))
+  (let* ((safe-title (replace-regexp-in-string "[^a-zA-Z0-9_\u4e00-\u9fa5-]" "_" title))
+         (filename (concat safe-title ".org"))
+         (temp-file (expand-file-name filename temporary-file-directory)))
+    (write-region (point-min) (point-max) temp-file nil 'silent)
+    (message "Exporting to Fuji library: %s" title)
+    (fuji-read temp-file)
+    (when (file-exists-p temp-file)
+      (delete-file temp-file))
+    (message "Chat exported to Fuji successfully.")))
+
 (defun fuji-library-mark-delete ()
   "Mark the current entry for deletion."
   (interactive)
@@ -2167,48 +2200,64 @@ Context Strategy:
                (unless (string-prefix-p "LOCAL-" (format "%s" id))
                  (push id remote-ids))))
 
-          ;; Inject Local Files (Strong Context)
-          (when (fboundp 'gptel-add-file)
-            (let ((inhibit-message t))
-              (dolist (f local-files)
-                (gptel-add-file f))))
+          (let ((load-context-p (y-or-n-p "Add current document list to chat context? ")))
+            (if load-context-p
+                (progn
+                  ;; Inject Local Files (Strong Context)
+                  (when (fboundp 'gptel-add-file)
+                    (let ((inhibit-message t))
+                      (dolist (f local-files)
+                        (gptel-add-file f))))
 
-          ;; 5. Insert Header
-          (insert "#+TITLE: Group Chat (" (number-to-string count) " documents)\n")
-          (insert "#+STARTUP: indent\n\n")
-          (insert "* System: " (number-to-string (length local-files)) " local files loaded into context.\n")
-          (when remote-ids
-             (insert "* System: " (number-to-string (length remote-ids)) " remote files available via RAG.\n"))
-          (insert "\n---\n\n")
-          
-          ;; 6. Setup Local Variables
-          (setq-local fuji--content-ids (nreverse content-ids))
-          
-          ;; 7. GPTel Config
-          (when fuji-gptel-backend
-            (let ((be (gptel-get-backend fuji-gptel-backend)))
-              (when be (setq-local gptel-backend be))))
-          (when fuji-gptel-model
-            (setq-local gptel-model fuji-gptel-model))
+                  ;; 5. Insert Header
+                  (insert "#+TITLE: Group Chat (" (number-to-string count) " documents)\n")
+                  (insert "#+STARTUP: indent\n\n")
+                  (insert "* System: " (number-to-string (length local-files)) " local files loaded into context.\n")
+                  (when remote-ids
+                     (insert "* System: " (number-to-string (length remote-ids)) " remote files available via RAG.\n"))
+                  (insert "\n---\n\n")
+                  
+                  ;; 6. Setup Local Variables
+                  (setq-local fuji--content-ids (nreverse content-ids))
+                  
+                  ;; 7. GPTel Config
+                  (when fuji-gptel-backend
+                    (let ((be (gptel-get-backend fuji-gptel-backend)))
+                      (when be (setq-local gptel-backend be))))
+                  (when fuji-gptel-model
+                    (setq-local gptel-model fuji-gptel-model))
 
-          ;; Tools: Only enable if we have remote content
-          (if remote-ids
-              (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-                (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
-                (message "Fuji: Hybrid Chat initialized (%d local, %d remote)" 
-                         (length local-files) (length remote-ids)))
-            ;; Else: No remote content -> No RAG tool
-            (setq-local gptel-tools nil)
-            (message "Fuji: Local Chat initialized (%d docs)" (length local-files)))
-          
-          (setq-local gptel-directives 
-                      (cons '(fuji-group . "You are a Knowledge Base Assistant. You have access to a specific group of documents. 
+                  ;; Tools: Only enable if we have remote content
+                  (if remote-ids
+                      (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                        (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
+                        (message "Fuji: Hybrid Chat initialized (%d local, %d remote)" 
+                                 (length local-files) (length remote-ids)))
+                    ;; Else: No remote content -> No RAG tool
+                    (setq-local gptel-tools nil)
+                    (message "Fuji: Local Chat initialized (%d docs)" (length local-files)))
+                  
+                  (setq-local gptel-directives 
+                              (cons '(fuji-group . "You are a Knowledge Base Assistant. You have access to a specific group of documents. 
 Some documents are provided directly in your context, while others are available via the 'query_graphlit' tool.
 If the user asks about the remote documents (listed in the System header), use the tool to search for answers.")
-                            gptel-directives))
-          (setq-local gptel-default-directive 'fuji-group)
-          
-          (message "Fuji: Hybrid Group Chat started with %d documents." count))))))
+                                    gptel-directives))
+                  (setq-local gptel-default-directive 'fuji-group)
+                  
+                  (message "Fuji: Hybrid Group Chat started with %d documents." count))
+              ;; ELSE: Do not load context, start clean
+              (insert "#+TITLE: Fuji Clean Chat\n")
+              (insert "#+STARTUP: indent\n\n")
+              (insert "* System: Clean chat initialized. No documents are loaded into context.\n")
+              (insert "\n---\n\n")
+              (setq-local fuji--content-ids nil)
+              (setq-local gptel-tools nil)
+              (when fuji-gptel-backend
+                (let ((be (gptel-get-backend fuji-gptel-backend)))
+                  (when be (setq-local gptel-backend be))))
+              (when fuji-gptel-model
+                (setq-local gptel-model fuji-gptel-model))
+              (message "Fuji: Clean Chat initialized."))))))))
 
 (defun fuji-library-unmark ()
   "Unmark the current entry."
@@ -2293,6 +2342,238 @@ If the user asks about the remote documents (listed in the System header), use t
         (message "Fuji: Deleting %d items..." (length marked-ids))
         ;; Refresh after a short delay to allow deletions to complete
         (run-with-timer 2 nil #'fuji-library-refresh)))))
+
+(defun fuji-library-retry-ingestion ()
+  "Retry Graphlit ingestion for a PENDING entry in the manager."
+  (interactive)
+  (let ((id (tabulated-list-get-id)))
+    (unless id
+      (error "No item under point"))
+    (unless (string-prefix-p "PENDING-" id)
+      (error "Can only retry ingestion for PENDING entries"))
+    (fuji--execute-retry-ingestion id)
+    (message "Fuji: Retry initiated for %s" id)))
+
+(defun fuji-retry-current-ingestion ()
+  "Retry Graphlit ingestion for the current fuji-mode session."
+  (interactive)
+  (unless (and (boundp 'fuji--content-id) fuji--content-id)
+    (error "Not in an active Fuji session"))
+  (unless (string-prefix-p "PENDING-" fuji--content-id)
+    (error "Current session is not PENDING. Ingestion already completed or local"))
+  (fuji--execute-retry-ingestion fuji--content-id)
+  (save-excursion
+    (goto-char (point-max))
+    (insert "\n[i] 🔄 Manually retrying RAG ingestion...\n"))
+  (message "Fuji: Retry initiated for current session"))
+
+(defun fuji--execute-retry-ingestion (id)
+  "Core logic to retry ingestion for PENDING ID."
+  (let* ((metadata (fuji--get-metadata-for-id id))
+         (results-dir-rel (alist-get 'results_dir metadata))
+         (results-dir (when results-dir-rel (expand-file-name results-dir-rel fuji-cache-directory)))
+         (md-file (when results-dir (expand-file-name "doc.md" results-dir)))
+         (filename (or (alist-get 'filename metadata) "Unknown"))
+         (archived-path-rel (alist-get 'archived_path metadata))
+         (doc-file (if archived-path-rel 
+                       (expand-file-name archived-path-rel fuji-cache-directory)
+                     (alist-get 'original_path metadata)))
+         (chat-buffer (get-buffer (format "*Fuji-%s*" filename))))
+    
+    (unless (and md-file (file-exists-p md-file))
+      (error "Extracted markdown file not found for %s" id))
+    
+    (let ((md-content (with-temp-buffer
+                        (insert-file-contents md-file)
+                        (buffer-string))))
+      (fuji--log "[RETRY] Starting async ingestion for %s..." filename)
+      (fuji--rag-ingest
+       md-content filename metadata
+       (lambda (content-id)
+         (fuji--log "[SUCCESS] Retry complete (ID: %s). Enabling RAG tools." content-id)
+         ;; Swap Metadata
+         (fuji--remove-metadata-entry id)
+         (fuji--add-metadata-entry content-id filename doc-file results-dir)
+         
+         ;; Update Running Session if exists
+         (let ((current-buf (or chat-buffer (get-buffer (format "*Fuji-%s*" filename)))))
+           (when (buffer-live-p current-buf)
+             (with-current-buffer current-buf
+               (let ((inhibit-read-only t))
+                 (setq-local fuji--content-id content-id)
+                 (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                   (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
+                   (message "Fuji: RAG tools enabled for chat."))
+                 (save-excursion
+                   (goto-char (point-max))
+                   (insert (format "\n[i] ✅ Ingestion successful! (ID: %s). RAG Enabled.\n" content-id)))))))
+         
+         ;; Refresh Library if open
+         (let ((lib-buf (get-buffer "*Fuji-Library*")))
+           (when (buffer-live-p lib-buf)
+             (run-with-timer 0.5 nil (lambda ()
+                                       (with-current-buffer lib-buf
+                                         (fuji-library-refresh)))))))))))
+
+(defun fuji-library-clear-all-pending ()
+  "Clear all orphaned PENDING records from the metadata cache and file system."
+  (interactive)
+  (let* ((cache (fuji--load-metadata-cache))
+         (pending-ids (cl-loop for entry in cache
+                               for id = (format "%s" (car entry))
+                               when (string-prefix-p "PENDING-" id)
+                               collect id))
+         (count 0))
+    (if (null pending-ids)
+        (message "Fuji: No PENDING records found to clear.")
+      (when (y-or-n-p (format "Found %d PENDING records. Clear them all? " (length pending-ids)))
+        (dolist (id pending-ids)
+          (let* ((metadata (fuji--get-metadata-for-id id))
+                 (results-dir-rel (alist-get 'results_dir metadata))
+                 (archived-path-rel (alist-get 'archived_path metadata))
+                 (filename (alist-get 'filename metadata)))
+            
+            ;; Clean results dir
+            (when results-dir-rel
+              (let ((dir (expand-file-name results-dir-rel fuji-cache-directory)))
+                (when (file-directory-p dir)
+                  (delete-directory dir t))))
+                  
+            ;; Clean archived file
+            (when archived-path-rel
+              (let ((file (expand-file-name archived-path-rel fuji-cache-directory)))
+                (when (file-exists-p file)
+                  (delete-file file))))
+                  
+            ;; Clean session file
+            (when filename
+              (let ((session-file (expand-file-name (concat filename ".session") fuji-chat-directory)))
+                (when (file-exists-p session-file)
+                  (delete-file session-file))))
+                  
+            ;; Remove metadata entry
+            (fuji--remove-metadata-entry id)
+            (cl-incf count)))
+        (message "Fuji: Cleared %d PENDING records." count)
+        (let ((lib-buf (get-buffer "*Fuji-Library*")))
+          (when (buffer-live-p lib-buf)
+            (with-current-buffer lib-buf
+              (fuji-library-refresh))))))))
+
+(defun fuji-library-fix-unknown-types ()
+  "Fix existing metadata entries that have doc_type 'unknown'."
+  (interactive)
+  (let ((cache (fuji--load-metadata-cache))
+        (fixed 0))
+    (dolist (entry cache)
+      (let* ((meta (cdr entry))
+             (doc-type (cdr (assoc 'doc_type meta)))
+             (file-path (or (alist-get 'original_path meta)
+                            (alist-get 'filename meta))))
+        (when (string= doc-type "unknown")
+          (let ((ext (file-name-extension file-path)))
+            (when ext
+              (setcdr (assoc 'doc_type meta) (downcase ext))
+              (cl-incf fixed))))))
+    (when (> fixed 0)
+      (fuji--save-metadata-cache cache)
+      (let ((lib-buf (get-buffer "*Fuji-Library*")))
+        (when (buffer-live-p lib-buf)
+          (with-current-buffer lib-buf
+            (fuji-library-refresh)))))
+    (message "Fuji: Fixed %d unknown document types." fixed)))
+
+;;; Prompt Management (Prompt Library)
+
+(defun fuji-prompt-file-path ()
+  "Get the path to the prompt library org file.
+It resides in the user's digital library (the parent directory of the `originals` folder)."
+  (let* ((orig-dir (fuji--get-originals-dir))
+         ;; Use directory-file-name to strip trailing slashes before getting the directory
+         (lib-dir (file-name-directory (directory-file-name orig-dir))))
+    (expand-file-name "prompts.org" lib-dir)))
+
+;;;###autoload
+(defun fuji-prompt-add ()
+  "Add a new prompt to the Prompt Library.
+If there is an active region, use it as the prompt body.
+Otherwise, open a temporary buffer to compose the prompt."
+  (interactive)
+  (let ((prompt-file (fuji-prompt-file-path))
+        (region-text (when (use-region-p)
+                       (buffer-substring-no-properties (region-beginning) (region-end)))))
+    (if region-text
+        (fuji--prompt-add-with-body region-text prompt-file)
+      (let ((buf (get-buffer-create "*Fuji Prompt Compose*")))
+        (with-current-buffer buf
+          (erase-buffer)
+          (if (fboundp 'org-mode) (org-mode) (text-mode))
+          (local-set-key (kbd "C-c C-c")
+                         (lambda ()
+                           (interactive)
+                           (let ((text (buffer-string)))
+                             ;; Strip the instructional header
+                             (when (string-match "\\`#.*\n#.*\n\n" text)
+                               (setq text (substring text (match-end 0))))
+                             (quit-window t)
+                             (fuji--prompt-add-with-body (string-trim text) prompt-file))))
+          (local-set-key (kbd "C-c C-k")
+                         (lambda ()
+                           (interactive)
+                           (quit-window t)
+                           (message "Fuji: Prompt addition cancelled.")))
+          (insert "# Create your prompt here.\n# Press C-c C-c to save, C-c C-k to cancel.\n\n")
+          (goto-char (point-max)))
+        (pop-to-buffer buf)))))
+
+(defun fuji--prompt-add-with-body (body prompt-file)
+  "Prompt for title and tags, then append the BODY to PROMPT-FILE."
+  (let* ((title (read-string "Prompt Title: "))
+         (tags-str (read-string "Tags (comma or space separated, e.g. methodology summarize): "))
+         (tags (split-string tags-str "[ ,]+" t))
+         (tags-formatted (if tags (format ":%s:" (mapconcat #'identity tags ":")) "")))
+    (with-current-buffer (find-file-noselect prompt-file)
+      (goto-char (point-max))
+      (unless (bolp) (insert "\n"))
+      (insert (format "* %s %s\n%s\n" title tags-formatted body))
+      (save-buffer)
+      (message "Fuji: Prompt '%s' saved to %s" title prompt-file))))
+
+;;;###autoload
+(defun fuji-prompt-insert ()
+  "Interactively select and insert a prompt from the prompt library."
+  (interactive)
+  (let ((prompt-file (fuji-prompt-file-path)))
+    (unless (file-exists-p prompt-file)
+      (error "Fuji: Prompt library not found at %s. Use `fuji-prompt-add` to create one." prompt-file))
+    (let ((prompts '()))
+      (with-temp-buffer
+        (insert-file-contents prompt-file)
+        (goto-char (point-min))
+        ;; Parse elements: ^\* Title :tags:\nBody
+        (while (re-search-forward "^\\* \\(.*?\\)\\(?:[ \t]+\\(:[a-zA-Z0-9_@:]+:\\)\\)?[ \t]*$" nil t)
+          (let* ((title (match-string-no-properties 1))
+                 (tags-match (match-string-no-properties 2))
+                 (tags (when tags-match (replace-regexp-in-string "^:\\|:$" "" tags-match)))
+                 (tags-list (when tags (split-string tags ":" t)))
+                 (start (point))
+                 (end (if (re-search-forward "^\\*" nil t)
+                          (progn (goto-char (match-beginning 0)) (point))
+                        (point-max)))
+                 (body (string-trim (buffer-substring-no-properties start end))))
+            (goto-char end)
+            ;; Format for completion: [tag1, tag2] Title
+            (let ((display (if tags-list
+                               (format "[%s] %s" (mapconcat #'identity tags-list ", ") title)
+                             title)))
+              (push (cons display body) prompts)))))
+      (if (null prompts)
+          (message "Fuji: No prompts found in library.")
+        (let* ((candidates (nreverse (mapcar #'car prompts)))
+               (selection (completing-read "\\[Fuji\\] Insert Prompt: " candidates nil t))
+               (body (cdr (assoc selection prompts))))
+          (when body
+            (insert body)))))))
 
 ;;;###autoload
 (defun fuji-manage-content ()
@@ -2398,7 +2679,7 @@ Calls CALLBACK with the resulting markdown file."
 
 
 ;;;###autoload
-(defun fuji-read ()
+(defun fuji-read (&optional file-path)
   "Start reading and chatting with a research document.
 
 Supported formats: PDF, DOCX, EPUB, HTML
@@ -2418,7 +2699,7 @@ Choose extraction method:
   (unless (fuji-verify-environment)
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
-  (let* ((raw-input (fuji--select-document))
+  (let* ((raw-input (or file-path (fuji--select-document)))
          ;; If input is a URL, convert it to PDF first (in temp dir)
          (initial-doc-file (if (string-match-p "^https?://" raw-input)
                                (progn
