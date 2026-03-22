@@ -1051,25 +1051,33 @@ This is used as a gptel tool in hybrid mode."
 (define-key fuji-mode-map (kbd "C-c n b") #'fuji-add-bibtex-entry-from-doi)
 (define-key fuji-mode-map (kbd "C-c n i") #'fuji-insert-citation)
 (define-key fuji-mode-map (kbd "C-c n p") #'fuji-prompt-insert)
-
+(define-key fuji-mode-map (kbd "C-c n e") #'fuji-chat-export-to-library)
 (define-minor-mode fuji-mode
   "Minor mode for Fuji chat buffers."
   :lighter " Nexus"
   :keymap fuji-mode-map)
 
 (defun fuji-session-set-model ()
-  "Interactively set the gptel model and backend for the current Nexus session."
+  "Interactively set the gptel model and backend for the current Nexus session, and persist to config."
   (interactive)
   (let* ((backends gptel--known-backends)
          (backend-name (completing-read "Select Backend: " 
                                         (mapcar (lambda (b) (gptel-backend-name (cdr b))) 
                                                 backends)))
          (backend (gptel-get-backend backend-name))
-         (model (completing-read "Select Model: " (gptel-backend-models backend))))
+         (model-str (completing-read "Select Model: " (gptel-backend-models backend)))
+         (model (intern model-str)))
+    ;; Local session update
     (setq-local gptel-backend backend)
     (setq-local gptel-model model)
-    (fuji--log "Model updated to %s (%s)" model backend-name)
-    (message "Fuji: Model set to %s" model)))
+    ;; Global sync and persistence
+    (setq fuji-gptel-backend backend-name)
+    (setq fuji-gptel-model model)
+    (if (fboundp 'fuji--update-persistent-config)
+        (fuji--update-persistent-config)
+      (message "Fuji: Persistent config function not loaded yet. Restart Emacs or reload fuji-configure.el. Selected model: %s" model))
+    (fuji--log "Model updated to %s (%s) and persisted." model backend-name)
+    (message "Fuji: Model set to %s and saved permanently" model)))
 
 (defun fuji-session-add-context ()
   "Interactively add a file as context to the current Nexus session."
@@ -2099,6 +2107,25 @@ Example: 'type:pdf t:research attention' matches items that are PDFs AND have 'r
       (message "No details available"))))
 
 
+(defun fuji-chat-export-to-library (title)
+  "Export the current chat buffer to the Fuji library as an Org file.
+Prompts for a TITLE, saves the current buffer to a temporary file,
+ingests it into Fuji via `fuji-read`, and deletes the temp file."
+  (interactive "sEnter title for this chat export: ")
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Current buffer is not in Org mode!"))
+  (when (string-blank-p title)
+    (user-error "Title cannot be empty!"))
+  (let* ((safe-title (replace-regexp-in-string "[^a-zA-Z0-9_\u4e00-\u9fa5-]" "_" title))
+         (filename (concat safe-title ".org"))
+         (temp-file (expand-file-name filename temporary-file-directory)))
+    (write-region (point-min) (point-max) temp-file nil 'silent)
+    (message "Exporting to Fuji library: %s" title)
+    (fuji-read temp-file)
+    (when (file-exists-p temp-file)
+      (delete-file temp-file))
+    (message "Chat exported to Fuji successfully.")))
+
 (defun fuji-library-mark-delete ()
   "Mark the current entry for deletion."
   (interactive)
@@ -2173,48 +2200,64 @@ Context Strategy:
                (unless (string-prefix-p "LOCAL-" (format "%s" id))
                  (push id remote-ids))))
 
-          ;; Inject Local Files (Strong Context)
-          (when (fboundp 'gptel-add-file)
-            (let ((inhibit-message t))
-              (dolist (f local-files)
-                (gptel-add-file f))))
+          (let ((load-context-p (y-or-n-p "Add current document list to chat context? ")))
+            (if load-context-p
+                (progn
+                  ;; Inject Local Files (Strong Context)
+                  (when (fboundp 'gptel-add-file)
+                    (let ((inhibit-message t))
+                      (dolist (f local-files)
+                        (gptel-add-file f))))
 
-          ;; 5. Insert Header
-          (insert "#+TITLE: Group Chat (" (number-to-string count) " documents)\n")
-          (insert "#+STARTUP: indent\n\n")
-          (insert "* System: " (number-to-string (length local-files)) " local files loaded into context.\n")
-          (when remote-ids
-             (insert "* System: " (number-to-string (length remote-ids)) " remote files available via RAG.\n"))
-          (insert "\n---\n\n")
-          
-          ;; 6. Setup Local Variables
-          (setq-local fuji--content-ids (nreverse content-ids))
-          
-          ;; 7. GPTel Config
-          (when fuji-gptel-backend
-            (let ((be (gptel-get-backend fuji-gptel-backend)))
-              (when be (setq-local gptel-backend be))))
-          (when fuji-gptel-model
-            (setq-local gptel-model fuji-gptel-model))
+                  ;; 5. Insert Header
+                  (insert "#+TITLE: Group Chat (" (number-to-string count) " documents)\n")
+                  (insert "#+STARTUP: indent\n\n")
+                  (insert "* System: " (number-to-string (length local-files)) " local files loaded into context.\n")
+                  (when remote-ids
+                     (insert "* System: " (number-to-string (length remote-ids)) " remote files available via RAG.\n"))
+                  (insert "\n---\n\n")
+                  
+                  ;; 6. Setup Local Variables
+                  (setq-local fuji--content-ids (nreverse content-ids))
+                  
+                  ;; 7. GPTel Config
+                  (when fuji-gptel-backend
+                    (let ((be (gptel-get-backend fuji-gptel-backend)))
+                      (when be (setq-local gptel-backend be))))
+                  (when fuji-gptel-model
+                    (setq-local gptel-model fuji-gptel-model))
 
-          ;; Tools: Only enable if we have remote content
-          (if remote-ids
-              (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
-                (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
-                (message "Fuji: Hybrid Chat initialized (%d local, %d remote)" 
-                         (length local-files) (length remote-ids)))
-            ;; Else: No remote content -> No RAG tool
-            (setq-local gptel-tools nil)
-            (message "Fuji: Local Chat initialized (%d docs)" (length local-files)))
-          
-          (setq-local gptel-directives 
-                      (cons '(fuji-group . "You are a Knowledge Base Assistant. You have access to a specific group of documents. 
+                  ;; Tools: Only enable if we have remote content
+                  (if remote-ids
+                      (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                        (setq-local gptel-tools (list fuji-gptel-tool-graphlit))
+                        (message "Fuji: Hybrid Chat initialized (%d local, %d remote)" 
+                                 (length local-files) (length remote-ids)))
+                    ;; Else: No remote content -> No RAG tool
+                    (setq-local gptel-tools nil)
+                    (message "Fuji: Local Chat initialized (%d docs)" (length local-files)))
+                  
+                  (setq-local gptel-directives 
+                              (cons '(fuji-group . "You are a Knowledge Base Assistant. You have access to a specific group of documents. 
 Some documents are provided directly in your context, while others are available via the 'query_graphlit' tool.
 If the user asks about the remote documents (listed in the System header), use the tool to search for answers.")
-                            gptel-directives))
-          (setq-local gptel-default-directive 'fuji-group)
-          
-          (message "Fuji: Hybrid Group Chat started with %d documents." count))))))
+                                    gptel-directives))
+                  (setq-local gptel-default-directive 'fuji-group)
+                  
+                  (message "Fuji: Hybrid Group Chat started with %d documents." count))
+              ;; ELSE: Do not load context, start clean
+              (insert "#+TITLE: Fuji Clean Chat\n")
+              (insert "#+STARTUP: indent\n\n")
+              (insert "* System: Clean chat initialized. No documents are loaded into context.\n")
+              (insert "\n---\n\n")
+              (setq-local fuji--content-ids nil)
+              (setq-local gptel-tools nil)
+              (when fuji-gptel-backend
+                (let ((be (gptel-get-backend fuji-gptel-backend)))
+                  (when be (setq-local gptel-backend be))))
+              (when fuji-gptel-model
+                (setq-local gptel-model fuji-gptel-model))
+              (message "Fuji: Clean Chat initialized."))))))))
 
 (defun fuji-library-unmark ()
   "Unmark the current entry."
@@ -2636,7 +2679,7 @@ Calls CALLBACK with the resulting markdown file."
 
 
 ;;;###autoload
-(defun fuji-read ()
+(defun fuji-read (&optional file-path)
   "Start reading and chatting with a research document.
 
 Supported formats: PDF, DOCX, EPUB, HTML
@@ -2656,7 +2699,7 @@ Choose extraction method:
   (unless (fuji-verify-environment)
     (error "Fuji: Environment not ready. Run M-x fuji-configure"))
   
-  (let* ((raw-input (fuji--select-document))
+  (let* ((raw-input (or file-path (fuji--select-document)))
          ;; If input is a URL, convert it to PDF first (in temp dir)
          (initial-doc-file (if (string-match-p "^https?://" raw-input)
                                (progn
