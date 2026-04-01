@@ -1121,6 +1121,7 @@ Each item is an alist with keys: id, name, createdDate, fileSize, state.")
 (define-key fuji-library-mode-map (kbd "U") 'fuji-library-unmark-all)
 (define-key fuji-library-mode-map (kbd "W") 'fuji-library-chat-with-group)
 (define-key fuji-library-mode-map (kbd "x") 'fuji-library-execute)
+(define-key fuji-library-mode-map (kbd "R") 'fuji-library-update-file)
 (define-key fuji-library-mode-map (kbd "r") 'fuji-library-retry-ingestion)
 (define-key fuji-library-mode-map (kbd "RET") 'fuji-library-open-session)
 (define-key fuji-library-mode-map (kbd "+") 'fuji-library-add-file)
@@ -2342,6 +2343,178 @@ If the user asks about the remote documents (listed in the System header), use t
         (message "Fuji: Deleting %d items..." (length marked-ids))
         ;; Refresh after a short delay to allow deletions to complete
         (run-with-timer 2 nil #'fuji-library-refresh)))))
+
+(defun fuji-library-update-file ()
+  "Update the original file of the current entry in the library without losing metadata or chat."
+  (interactive)
+  (let* ((old-id (tabulated-list-get-id))
+         (old-metadata (fuji--get-metadata-for-id old-id)))
+    (unless old-id
+      (error "No item under point"))
+    (let* ((filename (alist-get 'filename old-metadata))
+           (title (alist-get 'title old-metadata))
+           (tags (alist-get 'tags old-metadata))
+           (bib-key (alist-get 'bib_key old-metadata))
+           (old-archived-path-rel (alist-get 'archived_path old-metadata))
+           (old-results-dir-rel (alist-get 'results_dir old-metadata))
+           (new-file (read-file-name (format "Select new file for '%s': " filename) nil nil t)))
+      
+      (unless (file-exists-p new-file)
+        (error "Selected file does not exist"))
+
+      (let* ((new-archived (fuji--archive-file new-file))
+             (new-file-name-base (file-name-nondirectory new-file)))
+        (unless new-archived
+          (error "Failed to archive the new file"))
+        
+        (let* ((is-plain-text (fuji--is-plain-text-file new-archived))
+               (new-doc-type (if is-plain-text
+                                 "text"
+                               (cond
+                                ((string-match-p "\\.pdf$" new-archived) "pdf")
+                                ((string-match-p "\\.docx$" new-archived) "docx")
+                                ((string-match-p "\\.doc$" new-archived) "doc")
+                                ((string-match-p "\\.epub$" new-archived) "epub")
+                                ((string-match-p "\\.html?$" new-archived) "html")
+                                (t "binary"))))
+               (llm-tool (or fuji-llm-extraction-tool "marker"))
+               (mode-map (cond
+                          ((string= new-doc-type "text")
+                           '(("Direct (no extraction needed)" . direct)))
+                          ((string= new-doc-type "pdf")
+                           `((,(format "High Quality (%s) - Better accuracy" (capitalize llm-tool)) . llm)
+                             ("Fast (pdftotext) - Quick text-only extraction" . fast)
+                             ("Offline - Use pre-extracted markdown" . offline)))
+                          ((member new-doc-type '("docx" "epub" "html"))
+                           '(("Extract with Pandoc" . fast)
+                             ("Offline - Use pre-extracted markdown" . offline)))
+                          (t
+                           (error "Unsupported file type: %s" new-archived))))
+               (mode-label (completing-read "Extraction method for updated file: " (mapcar #'car mode-map) nil t))
+               (mode (cdr (assoc mode-label mode-map)))
+               (new-results-dir (fuji--get-cache-path new-archived)))
+          
+          (tabulated-list-put-tag "U" t)
+          (message "Fuji: Starting background update for %s..." filename)
+          
+          (let ((extraction-callback
+                 (lambda (md-file)
+                   (let* ((md-content (with-temp-buffer
+                                        (insert-file-contents md-file)
+                                        (buffer-string)))
+                          (new-metadata `((filename . ,new-file-name-base)
+                                          (pdf-path . ,new-archived)
+                                          (results-dir . ,new-results-dir)))
+                          (text-size (string-bytes md-content)))
+                     
+                     (if (> text-size 102400)
+                         (let ((local-id (format "LOCAL-%s" (secure-hash 'md5 new-file-name-base))))
+                           (fuji--log "[INFO] Updated file too large for RAG. Using Local Mode.")
+                           (fuji--finalize-update old-id local-id new-file-name-base new-archived new-results-dir title tags bib-key old-archived-path-rel old-results-dir-rel new-doc-type))
+                       (progn
+                         (fuji--log "[STEP] Starting async ingestion for updated %s..." new-file-name-base)
+                         (fuji--rag-ingest
+                          md-content new-file-name-base new-metadata
+                          (lambda (new-content-id)
+                            (fuji--log "[SUCCESS] Ingestion complete (New ID: %s)." new-content-id)
+                            (fuji--finalize-update old-id new-content-id new-file-name-base new-archived new-results-dir title tags bib-key old-archived-path-rel old-results-dir-rel new-doc-type)))))))))
+            (pcase mode
+              ('direct
+               (funcall extraction-callback new-archived))
+              ('offline
+               (let ((local-dir (read-directory-name "Select directory with pre-extracted results: " nil nil t)))
+                 (fuji--use-local-marker-result local-dir new-results-dir)
+                 (let ((md-file (fuji--find-marker-output new-results-dir)))
+                   (if md-file
+                       (funcall extraction-callback md-file)
+                     (error "Fuji: No .md file found in the selected directory!")))))
+              ('llm
+               (let ((extractor (fuji-get-extractor llm-tool)))
+                 (funcall (fuji-extractor-extract-fn extractor)
+                          new-archived new-results-dir
+                          extraction-callback)))
+              ('fast
+               (if (string= new-doc-type "pdf")
+                   (fuji--extract-pdf-text new-archived new-results-dir extraction-callback)
+                 (fuji--extract-binary-pandoc new-archived new-results-dir extraction-callback))))))))))
+
+(defun fuji--finalize-update (old-id new-id new-filename new-archived new-results-dir title tags bib-key old-archived-path-rel old-results-dir-rel new-doc-type)
+  "Complete the update process, migrating session, updating metadata, and cleaning up old files."
+  (let ((old-id-key (if (stringp old-id) (intern old-id) old-id))
+        (new-id-key (if (stringp new-id) (intern new-id) new-id)))
+    (if (string= old-id new-id)
+        (let* ((cache (fuji--load-metadata-cache))
+               (entry (assoc old-id-key cache)))
+          (when entry
+            (let ((meta (cdr entry)))
+              (setcdr (assoc 'archived_path meta) (file-relative-name new-archived fuji-cache-directory))
+              (setcdr (assoc 'results_dir meta) (file-relative-name new-results-dir fuji-cache-directory))
+              (setcdr (assoc 'file_size meta) (file-attribute-size (file-attributes new-archived)))
+              (setcdr (assoc 'file_hash meta) (secure-hash 'sha256 new-archived))
+              (setcdr (assoc 'upload_date meta) (format-time-string "%Y-%m-%d %H:%M:%S"))
+              (setcdr (assoc 'doc_type meta) new-doc-type)
+              (setcdr (assoc 'filename meta) new-filename)
+              (fuji--save-metadata-cache cache)))
+          (message "Fuji: Updated record %s in-place." old-id))
+      
+      (progn
+        (let ((old-session (fuji--get-session-file old-id))
+              (new-session (fuji--get-session-file new-id)))
+          (when (and old-session (file-exists-p old-session))
+            (rename-file old-session new-session t)))
+        
+        (fuji--add-metadata-entry new-id new-filename new-archived new-results-dir)
+        (let* ((cache (fuji--load-metadata-cache))
+               (entry (assoc new-id-key cache)))
+          (when entry
+            (when title (setcdr (assoc 'title (cdr entry)) title))
+            (when tags  (setcdr (assoc 'tags (cdr entry)) tags))
+            (when bib-key (setcdr (assoc 'bib_key (cdr entry)) bib-key))
+            (setcdr (assoc 'doc_type (cdr entry)) new-doc-type)
+            (fuji--save-metadata-cache cache)))
+        
+        (when old-archived-path-rel
+          (let ((old-archived (expand-file-name old-archived-path-rel fuji-cache-directory)))
+            (when (file-exists-p old-archived)
+              (ignore-errors (delete-file old-archived)))))
+        (when old-results-dir-rel
+          (let ((old-results (expand-file-name old-results-dir-rel fuji-cache-directory)))
+            (when (file-directory-p old-results)
+              (ignore-errors (delete-directory old-results t)))))
+        
+        (fuji--remove-metadata-entry old-id)
+        
+        (unless (string-prefix-p "LOCAL-" old-id)
+          (fuji--rag-delete old-id (lambda (success)
+                                     (if success
+                                         (fuji--log "[SUCCESS] Old Graphlit record %s deleted." old-id)
+                                       (fuji--log "[WARNING] Failed to delete old Graphlit record %s." old-id)))))))
+    
+    (dolist (buf (buffer-list))
+      (with-current-buffer buf
+        (when (and (derived-mode-p 'fuji-mode)
+                   (boundp 'fuji--content-id)
+                   (string= fuji--content-id old-id))
+          (let ((inhibit-read-only t))
+            (setq-local fuji--content-id new-id)
+            (setq-local fuji--filename new-filename)
+            (setq-local fuji--results-dir new-results-dir)
+            (ignore-errors (rename-buffer (format "*Fuji-Chat: %s*" new-filename) t))
+            (save-excursion
+              (goto-char (point-max))
+              (insert "\n[i] 🔄 The fundamental document for this session was explicitly UPDATED by the user.\n"
+                      (format "    New Document ID: %s\n" new-id)))
+            (if (string-prefix-p "LOCAL-" new-id)
+                (setq-local gptel-tools nil)
+              (when (and (boundp 'gptel-tools) fuji-gptel-tool-graphlit)
+                (setq-local gptel-tools (list fuji-gptel-tool-graphlit))))))))
+    
+    (let ((lib-buf (get-buffer "*Fuji-Library*")))
+      (when (buffer-live-p lib-buf)
+        (run-with-timer 0.5 nil (lambda ()
+                                  (with-current-buffer lib-buf
+                                    (fuji-library-refresh))))))
+    (message "Fuji: File update completed successfully!")))
 
 (defun fuji-library-retry-ingestion ()
   "Retry Graphlit ingestion for a PENDING entry in the manager."
